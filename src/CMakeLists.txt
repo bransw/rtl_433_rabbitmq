@@ -27,6 +27,7 @@ add_library(r_433 STATIC
     output_influx.c
     output_log.c
     output_mqtt.c
+    output_rabbitmq.c
     output_rtltcp.c
     output_trigger.c
     output_udp.c

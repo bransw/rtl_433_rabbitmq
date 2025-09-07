@@ -275,7 +275,7 @@ static void help_output(void)
 {
     term_help_fprintf(stdout,
             "\t\t= Output format option =\n"
-            "  [-F log|kv|json|csv|mqtt|influx|syslog|trigger|rtl_tcp|http|null] Produce decoded output in given format.\n"
+            "  [-F log|kv|json|csv|mqtt|rabbitmq|influx|syslog|trigger|rtl_tcp|http|null] Produce decoded output in given format.\n"
             "\tWithout this option the default is LOG and KV output. Use \"-F null\" to remove the default.\n"
             "\tAppend output to file with :<filename> (e.g. -F csv:log.csv), defaults to stdout.\n"
             "  [-F mqtt[s][:[//]host[:port][,<options>]] (default: localhost:1883)\n"
@@ -295,6 +295,14 @@ static void help_output(void)
             "\tFor TLS use e.g. -F \"mqtts://host,tls_cert=<path>,tls_key=<path>,tls_ca_cert=<path>\"\n"
             "\tWith MQTT each rtl_433 instance needs a distinct driver selection. The MQTT Client-ID is computed from the driver string.\n"
             "\tIf you use multiple RTL-SDR, perhaps set a serial and select by that (helps not to get the wrong antenna).\n"
+            "  [-F rabbitmq[:[//]host[:port][,<options>]] (default: localhost:5672)\n"
+            "\tSpecify RabbitMQ server with e.g. -F rabbitmq://localhost:5672\n"
+            "\tDefault user and password are read from RABBITMQ_USERNAME and RABBITMQ_PASSWORD env vars.\n"
+            "\tAdd RabbitMQ options with e.g. -F \"rabbitmq://host:5672,opt=arg\"\n"
+            "\tRabbitMQ options are: user=foo, pass=bar, vhost=/path, exchange=name, result_queue=name, unknown_queue=name\n"
+            "\tDetected packets (with model field) are sent to 'result_queue' with routing key 'detected'\n"
+            "\tUndetected packets are sent to 'unknown_queue' with routing key 'undetected'\n"
+            "\tE.g. -F \"rabbitmq://localhost:5672,user=guest,pass=guest,vhost=/,exchange=rtl_433\"\n"
             "  [-F influx[:[//]host[:port][/<path and options>]]\n"
             "\tSpecify InfluxDB 2.0 server with e.g. -F \"influx://localhost:9999/api/v2/write?org=<org>&bucket=<bucket>,token=<authtoken>\"\n"
             "\tSpecify InfluxDB 1.x server with e.g. -F \"influx://localhost:8086/write?db=<db>&p=<password>&u=<user>\"\n"
@@ -1233,6 +1241,9 @@ static void parse_conf_option(r_cfg_t *cfg, int opt, char *arg)
         }
         else if (strncmp(arg, "mqtt", 4) == 0) {
             add_mqtt_output(cfg, arg);
+        }
+        else if (strncmp(arg, "rabbitmq", 8) == 0) {
+            add_rabbitmq_output(cfg, arg);
         }
         else if (strncmp(arg, "influx", 6) == 0) {
             add_influx_output(cfg, arg);

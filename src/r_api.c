@@ -33,6 +33,7 @@
 #include "output_log.h"
 #include "output_udp.h"
 #include "output_mqtt.h"
+#include "output_rabbitmq.h"
 #include "output_influx.h"
 #include "output_trigger.h"
 #include "output_rtltcp.h"
@@ -1069,6 +1070,11 @@ void add_kv_output(r_cfg_t *cfg, char *param)
 void add_mqtt_output(r_cfg_t *cfg, char *param)
 {
     list_push(&cfg->output_handler, data_output_mqtt_create(get_mgr(cfg), param, cfg->dev_query));
+}
+
+void add_rabbitmq_output(r_cfg_t *cfg, char *param)
+{
+    list_push(&cfg->output_handler, data_output_rabbitmq_create(get_mgr(cfg), param, cfg->dev_query));
 }
 
 void add_influx_output(r_cfg_t *cfg, char *param)

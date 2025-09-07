@@ -454,7 +454,7 @@ E.g. -X "n=doorbell,m=OOK_PWM,s=400,l=800,r=7000,g=1000,match={24}0xa9878c,repea
 
 
 		= Output format option =
-  [-F log|kv|json|csv|mqtt|influx|syslog|trigger|rtl_tcp|http|null] Produce decoded output in given format.
+  [-F log|kv|json|csv|mqtt|rabbitmq|influx|syslog|trigger|rtl_tcp|http|null] Produce decoded output in given format.
 	Without this option the default is LOG and KV output. Use "-F null" to remove the default.
 	Append output to file with :<filename> (e.g. -F csv:log.csv), defaults to stdout.
   [-F mqtt[s][:[//]host[:port][,<options>]] (default: localhost:1883)
@@ -474,6 +474,14 @@ E.g. -X "n=doorbell,m=OOK_PWM,s=400,l=800,r=7000,g=1000,match={24}0xa9878c,repea
 	For TLS use e.g. -F "mqtts://host,tls_cert=<path>,tls_key=<path>,tls_ca_cert=<path>"
 	With MQTT each rtl_433 instance needs a distinct driver selection. The MQTT Client-ID is computed from the driver string.
 	If you use multiple RTL-SDR, perhaps set a serial and select by that (helps not to get the wrong antenna).
+  [-F rabbitmq[:[//]host[:port][,<options>]] (default: localhost:5672)
+	Specify RabbitMQ server with e.g. -F rabbitmq://localhost:5672
+	Default user and password are read from RABBITMQ_USERNAME and RABBITMQ_PASSWORD env vars.
+	Add RabbitMQ options with e.g. -F "rabbitmq://host:5672,opt=arg"
+	RabbitMQ options are: user=foo, pass=bar, vhost=/path, exchange=name, result_queue=name, unknown_queue=name
+	Detected packets (with model field) are sent to 'result_queue' with routing key 'detected'
+	Undetected packets are sent to 'unknown_queue' with routing key 'undetected'
+	E.g. -F "rabbitmq://localhost:5672,user=guest,pass=guest,vhost=/,exchange=rtl_433"
   [-F influx[:[//]host[:port][/<path and options>]]
 	Specify InfluxDB 2.0 server with e.g. -F "influx://localhost:9999/api/v2/write?org=<org>&bucket=<bucket>,token=<authtoken>"
 	Specify InfluxDB 1.x server with e.g. -F "influx://localhost:8086/write?db=<db>&p=<password>&u=<user>"
