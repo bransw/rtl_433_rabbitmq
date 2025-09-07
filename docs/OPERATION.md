@@ -460,6 +460,22 @@ Supported MQTT formats: (default is all formats)
 The `<topic>` string will expand keys like `[/model]`, see below.
 E.g. `-F "mqtt://localhost:1883,user=USERNAME,pass=PASSWORD,retain=0,devices=rtl_433[/id]"`
 
+### RabbitMQ output
+
+Use `-F rabbitmq` to add an output in RabbitMQ/AMQP format.
+
+Specify RabbitMQ server with e.g. `-F rabbitmq://localhost:5672`.
+
+Add RabbitMQ options with e.g. `-F "rabbitmq://host:5672,opt=arg"`.
+Supported RabbitMQ options are: `user=foo`, `pass=bar`, `vhost=/path`, `exchange=name`, `result_queue=name`, `unknown_queue=name`.
+
+- Detected packets (with `model` field) are sent to `result_queue` with routing key `detected`.
+- Undetected packets are sent to `unknown_queue` with routing key `undetected`.
+
+Example:
+
+`-F "rabbitmq://localhost:5672,user=guest,pass=guest,vhost=/,exchange=rtl_433"`
+
 ### MQTT Format Strings
 
 Use format strings of:

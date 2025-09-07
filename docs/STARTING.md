@@ -133,6 +133,7 @@ Any number of outputs can be selected:
 - `-F json` prints json lines
 - `-F csv` prints a csv formatted file
 - `-F mqtt` sends to MQTT
+- `-F rabbitmq` sends to RabbitMQ (AMQP)
 - `-F influx` sends to InfluxDB
 - `-F syslog` send UDP messages
 - `-F trigger` puts a `1` to the given file, can be used to e.g. on a Raspberry Pi flash the LED.
@@ -140,7 +141,7 @@ Any number of outputs can be selected:
 - `-F http` adds a HTTP API server, a UI is at e.g. http://localhost:8433/
 
 Append output to file with `:<filename>` (e.g. `-F csv:log.csv`), default is to print to stdout.
-Specify host/port for `mqtt`, `influx`, `syslog`, with e.g. `-F syslog:127.0.0.1:1514`
+Specify host/port for `mqtt`, `rabbitmq`, `influx`, `syslog`, with e.g. `-F syslog:127.0.0.1:1514`
 
 ::: tip
     [-F kv | json | csv | mqtt | influx | syslog | trigger | rtl_tcp | http | null | help] Produce decoded output in given format.

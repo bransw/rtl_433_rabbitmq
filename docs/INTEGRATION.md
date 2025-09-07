@@ -180,6 +180,44 @@ InfluxDB also comes with MQTT integration through Telegraf,
 see [MQTT Monitoring](https://www.influxdata.com/integration/mqtt-monitoring/)
 and [MQTT Consumer Input Plugin](https://github.com/influxdata/telegraf/tree/master/plugins/inputs/mqtt_consumer).
 
+### RabbitMQ / AMQP
+
+rtl_433 can publish decoded data directly to RabbitMQ using `-F rabbitmq`.
+
+Basic usage:
+
+    rtl_433 -F "rabbitmq://localhost:5672,user=guest,pass=guest,vhost=/,exchange=rtl_433"
+
+Options:
+
+- `user`, `pass`: credentials (also read from `RABBITMQ_USERNAME`, `RABBITMQ_PASSWORD`).
+- `vhost`: virtual host, e.g. `/`.
+- `exchange`: exchange to publish to (topic exchange recommended).
+- `result_queue`, `unknown_queue`: destination queues for detected/undetected packets.
+
+Routing:
+
+- Detected packets (with `model` field) are sent to `result_queue` with routing key `detected`.
+- Undetected packets are sent to `unknown_queue` with routing key `undetected`.
+
+Example consumer (Python, `pika`):
+
+```python
+import pika, json
+
+connection = pika.BlockingConnection(pika.URLParameters("amqp://guest:guest@localhost:5672/"))
+channel = connection.channel()
+channel.exchange_declare(exchange="rtl_433", exchange_type="topic", durable=True)
+channel.queue_declare(queue="rtl_433.detected", durable=True)
+channel.queue_bind(queue="rtl_433.detected", exchange="rtl_433", routing_key="detected")
+
+def cb(ch, method, properties, body):
+    print(json.loads(body))
+
+channel.basic_consume(queue="rtl_433.detected", on_message_callback=cb, auto_ack=True)
+channel.start_consuming()
+```
+
 ### MySQL
 
 TBD.

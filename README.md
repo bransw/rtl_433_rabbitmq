@@ -77,7 +77,7 @@ See [CONTRIBUTING.md](./docs/CONTRIBUTING.md).
   [-w <filename> | help] Save data stream to output file (a '-' dumps samples to stdout)
   [-W <filename> | help] Save data stream to output file, overwrite existing file
 		= Data output options =
-  [-F log | kv | json | csv | mqtt | influx | syslog | trigger | rtl_tcp | http | null | help] Produce decoded output in given format.
+  [-F log | kv | json | csv | mqtt | rabbitmq | influx | syslog | trigger | rtl_tcp | http | null | help] Produce decoded output in given format.
        Append output to file with :<filename> (e.g. -F csv:log.csv), defaults to stdout.
        Specify host/port for syslog with e.g. -F syslog:127.0.0.1:1514
   [-M time[:<options>] | protocol | level | noise[:<secs>] | stats | bits | help] Add various meta data to each output.
