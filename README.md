@@ -10,6 +10,31 @@ Actively tested and supported are Realtek RTL2832 based DVB dongles (using RTL-S
 
 ![rtl_433 screenshot](./docs/screenshot.png)
 
+## 🆕 RTL_433 Split Architecture
+
+This project now includes a **client-server architecture** for distributed signal processing:
+
+- **`rtl_433_client`** - Receives radio signals, demodulates to pulse data, sends to server
+- **`rtl_433_server`** - Receives pulse data, decodes devices, manages queues *(coming soon)*
+
+### Quick Start - Client
+
+```bash
+# HTTP transport to server
+./rtl_433_client --transport http://localhost:8080/signals
+
+# MQTT transport
+./rtl_433_client --transport mqtt://user:pass@localhost:1883/topic
+
+# RabbitMQ transport  
+./rtl_433_client --transport amqp://guest:guest@localhost:5672/rtl_433/signals
+
+# Process file instead of SDR
+./rtl_433_client -r tests/signals/g001_433.92M_250k.cu8 --transport http://localhost:8080/signals
+```
+
+See [client/README.md](client/README.md) for detailed documentation and [docs/SPLIT_ARCHITECTURE.md](docs/SPLIT_ARCHITECTURE.md) for architecture details.
+
 ## Building / Installation
 
 rtl_433 is written in portable C (C99 standard) and known to compile on Linux (also embedded), MacOS, and Windows systems.

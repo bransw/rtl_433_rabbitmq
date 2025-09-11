@@ -9,6 +9,16 @@ rtl_433 currently supports these input types:
 Building rtl_433 with RTL-SDR or SoapySDR support is optional but using RTL-SDR is highly recommended.
 The libraries and header files for RTL-SDR and/or SoapySDR should be installed beforehand.
 
+## 🆕 Split Architecture Components
+
+The project now includes client-server architecture components:
+
+* **`rtl_433`** - Original monolithic application (default build)
+* **`rtl_433_client`** - Signal demodulation client (optional, `-DBUILD_CLIENT=ON`)
+* **`rtl_433_server`** - Device decoding server (planned)
+
+For the client, additional dependencies may be required depending on transport options.
+
 ## Nightly builds
 
 Some distributions offer nightly builds.
@@ -71,6 +81,8 @@ Get the `rtl_433` git repository if needed:
 
     git clone https://github.com/merbanan/rtl_433.git
 
+#### Building Original rtl_433 (Default)
+
 Installation using CMake and Make (commonly available):
 
     cd rtl_433/
@@ -83,6 +95,68 @@ Installation using CMake and Ninja (newer and faster):
     cmake -DFORCE_COLORED_BUILD:BOOL=ON -GNinja -B build
     cmake --build build -j 4
     cmake --build build --target install
+
+#### Building rtl_433_client (Split Architecture)
+
+**Install Additional Dependencies:**
+
+Debian/Ubuntu:
+```bash
+sudo apt-get install libjson-c-dev libcurl4-openssl-dev libssl-dev
+
+# Optional: MQTT support
+sudo apt-get install libpaho-mqtt-dev
+
+# Optional: RabbitMQ support
+sudo apt-get install librabbitmq-dev
+```
+
+Fedora/CentOS/RHEL:
+```bash
+sudo dnf install json-c-devel libcurl-devel openssl-devel
+
+# Optional: MQTT support  
+sudo dnf install paho-c-devel
+
+# Optional: RabbitMQ support
+sudo dnf install librabbitmq-devel
+```
+
+macOS:
+```bash
+brew install json-c curl openssl
+
+# Optional: MQTT support
+brew install paho-mqtt-c
+
+# Optional: RabbitMQ support  
+brew install rabbitmq-c
+```
+
+**Build rtl_433_client:**
+
+```bash
+cd rtl_433/
+cmake -DBUILD_CLIENT=ON -B build
+cmake --build build --target rtl_433_client
+
+# Optional: Install client
+sudo cmake --build build --target install
+```
+
+**Build Options:**
+
+```bash
+# Client with all transport support
+cmake -DBUILD_CLIENT=ON -DMQTT_SUPPORT=ON -DRABBITMQ_SUPPORT=ON -B build
+
+# Client without optional transports
+cmake -DBUILD_CLIENT=ON -DMQTT_SUPPORT=OFF -DRABBITMQ_SUPPORT=OFF -B build
+
+# Build both original rtl_433 and client
+cmake -DBUILD_CLIENT=ON -B build
+cmake --build build  # Builds both rtl_433 and rtl_433_client
+```
 
 If installing to a global prefix (e.g. the default `/usr/local`) then instead run `make install` with privileges, .i.e.
 
@@ -111,9 +185,29 @@ Then install only from packages (version 0.7) or only from source (version 0.8).
 
 To properly configure builds without relying on automatic feature detection you should set all options explicitly, e.g.
 
-    cmake -DENABLE_RTLSDR=ON -DENABLE_SOAPYSDR=ON -DENABLE_OPENSSL=ON -DBUILD_DOCUMENTATION=OFF -DCMAKE_BUILD_TYPE=Release -GNinja -B build
-    cmake --build build -j 10
-    DESTDIR=/tmp/destdir cmake --build build --target install
+**Original rtl_433:**
+```bash
+cmake -DENABLE_RTLSDR=ON -DENABLE_SOAPYSDR=ON -DENABLE_OPENSSL=ON -DBUILD_DOCUMENTATION=OFF -DCMAKE_BUILD_TYPE=Release -GNinja -B build
+cmake --build build -j 10
+DESTDIR=/tmp/destdir cmake --build build --target install
+```
+
+**rtl_433_client:**
+```bash
+cmake -DBUILD_CLIENT=ON -DENABLE_RTLSDR=ON -DENABLE_SOAPYSDR=ON -DENABLE_OPENSSL=ON \
+      -DMQTT_SUPPORT=ON -DRABBITMQ_SUPPORT=ON -DCMAKE_BUILD_TYPE=Release -GNinja -B build
+cmake --build build -j 10 --target rtl_433_client
+DESTDIR=/tmp/destdir cmake --build build --target install
+```
+
+**Both components:**
+```bash
+cmake -DBUILD_CLIENT=ON -DENABLE_RTLSDR=ON -DENABLE_SOAPYSDR=ON -DENABLE_OPENSSL=ON \
+      -DMQTT_SUPPORT=ON -DRABBITMQ_SUPPORT=ON -DBUILD_DOCUMENTATION=OFF \
+      -DCMAKE_BUILD_TYPE=Release -GNinja -B build
+cmake --build build -j 10  # Builds both rtl_433 and rtl_433_client
+DESTDIR=/tmp/destdir cmake --build build --target install
+```
 
 ## Windows
 

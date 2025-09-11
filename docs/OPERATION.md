@@ -16,6 +16,44 @@ rtl_433 will either acquire a live signal from an input or read a sample file wi
 Then process that signal, analyse it's properties (if enabled) and write the signal with dumpers (if enabled).
 The raw data is run through decoders to produce decoded output data.
 
+## 🆕 Split Architecture Operation
+
+The RTL_433 Split Architecture provides an alternative operational model where signal processing is distributed:
+
+### rtl_433_client Operation
+
+The client handles signal acquisition and demodulation:
+
+1. **Signal Acquisition** - Receives IQ data from RTL-SDR/SoapySDR or files
+2. **Demodulation** - IQ → AM/FM → pulse detection
+3. **Protocol Recognition** - Identifies known devices (244 protocols)
+4. **Data Transmission** - Sends pulse/device data to server
+
+**Basic Usage:**
+```bash
+# Start client with HTTP transport
+./rtl_433_client --transport http://localhost:8080/signals
+
+# Client with file input
+./rtl_433_client -r input.cu8 --transport mqtt://localhost:1883/rtl433
+
+# Client with custom frequency and gain
+./rtl_433_client -f 868M -g 42 --transport amqp://localhost:5672/rtl_433/signals
+```
+
+See [client/README.md](../client/README.md) for detailed client operation instructions.
+
+### rtl_433_server Operation (Planned)
+
+The server will handle device decoding and data management:
+
+1. **Data Reception** - Receives pulse/device data from multiple clients
+2. **Protocol Processing** - Advanced decoding and analysis
+3. **Queue Management** - Routes data to "ready" or "unknown" queues
+4. **API Services** - Provides REST API for data access
+
+For complete architectural details, see [SPLIT_ARCHITECTURE.md](SPLIT_ARCHITECTURE.md).
+
 ## Inputs
 
 Possible inputs are RTL-SDR, SoapySDR, and rtl_tcp.
