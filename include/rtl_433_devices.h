@@ -289,7 +289,6 @@
     DECL(nexus_sauna) \
     DECL(homelead_hg9901) \
     DECL(maverick_xr50) \
-    DECL(rabbitmq) \
 
     /* Add new decoders here. */
 

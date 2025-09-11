@@ -46,7 +46,7 @@ auto_level = true
 # Transport configuration
 [transport]
 # Transport type: http, mqtt, rabbitmq, tcp, udp
-type = http
+type = rabbitmq
 
 # Server address
 host = localhost
