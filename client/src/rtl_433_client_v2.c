@@ -279,76 +279,60 @@ static void client_sdr_callback(sdr_event_t *ev, void *ctx)
         if (demod->frame_end_ago)
             demod->frame_end_ago += n_samples;
         
-        // AM demodulation for CU8 samples
-        if (demod->sample_size == 2) { // CU8
-            // envelope_detect expects uint16_t*, but we have int16_t*
-            // Cast to compatible type for now
-            envelope_detect(iq_buf, (uint16_t*)demod->am_buf, n_samples);
-        }
+        // Apply same proper IQ→AM→pulse pipeline as file processing
         
-        // Simplified approach: Just check if we have valid AM buffer data
-        // and create a simple pulse detection without device decoders
+        // Step 1: AM demodulation (using correct buffer types)
+        uint16_t am_buf_temp[n_samples];
+        int16_t am_buf[n_samples];
+        int16_t fm_buf[n_samples];  // For FSK if needed
+        
+        float avg_db = -999.0f;
+        if (demod->sample_size == 2) { // CU8
+            avg_db = envelope_detect(iq_buf, am_buf_temp, n_samples);
+            
+            // Convert uint16_t to int16_t for pulse detection
+            for (unsigned long i = 0; i < n_samples; i++) {
+                am_buf[i] = (int16_t)am_buf_temp[i];
+            }
+        }
         
         if (data_callbacks <= 3) {
-            print_logf(LOG_INFO, "SDR", "AM buffer first 10 values: %d %d %d %d %d %d %d %d %d %d", 
-                      demod->am_buf[0], demod->am_buf[1], demod->am_buf[2], demod->am_buf[3], demod->am_buf[4],
-                      demod->am_buf[5], demod->am_buf[6], demod->am_buf[7], demod->am_buf[8], demod->am_buf[9]);
+            print_logf(LOG_INFO, "SDR", "AM demodulation: avg_db=%.1f, first values: %d %d %d %d %d", 
+                      avg_db, am_buf[0], am_buf[1], am_buf[2], am_buf[3], am_buf[4]);
         }
         
-        // For testing: create a simple pulse if we have strong signal
-        // This will help us verify the transport is working
-        int16_t max_signal = 0;
-        for (unsigned i = 0; i < n_samples && i < 1000; i++) {
-            if (demod->am_buf[i] > max_signal) {
-                max_signal = demod->am_buf[i];
-            }
+        // Step 2: Real pulse detection (same as file processing)
+        pulse_data_t pulse_data = {0};
+        pulse_data_t fsk_pulse_data = {0};
+        
+        int package_type = pulse_detect_package(demod->pulse_detect, am_buf, fm_buf, n_samples, 
+                                               cfg->samp_rate, 0, &pulse_data, &fsk_pulse_data, 
+                                               FSK_PULSE_DETECT_OLD);
+                                               
+        // Step 3: Process detected packages with pulse_analyzer (like rtl_433 -A)
+        if (package_type == PULSE_DATA_OOK && pulse_data.num_pulses > 0) {
+            calc_rssi_snr(cfg, &pulse_data);
+            
+            print_logf(LOG_INFO, "SDR", "Detected OOK package with %u pulses (avg_db=%.1f)", 
+                      pulse_data.num_pulses, avg_db);
+                      
+            // Use pulse_analyzer for detailed analysis
+            r_device device = {.log_fn = log_device_handler, .output_ctx = cfg};
+            pulse_analyzer(&pulse_data, package_type, &device);
+            
+            // Send real analyzed data
+            client_pulse_handler(&pulse_data);
         }
         
-        // If signal is strong enough, create a test pulse
-        if (max_signal > 1000) { // Arbitrary threshold for real signal detection
-            pulse_data_clear(&demod->pulse_data);
+        if (package_type == PULSE_DATA_FSK && fsk_pulse_data.num_pulses > 0) {
+            calc_rssi_snr(cfg, &fsk_pulse_data);
             
-            // Create a simple test pulse
-            demod->pulse_data.num_pulses = 1;
-            demod->pulse_data.pulse[0] = 1000;  // 1000 samples pulse
-            demod->pulse_data.gap[0] = 2000;    // 2000 samples gap
-            demod->pulse_data.sample_rate = cfg->samp_rate;
-            demod->pulse_data.centerfreq_hz = cfg->center_frequency;
-            demod->pulse_data.freq1_hz = cfg->center_frequency;
-            
-            if (data_callbacks <= 10) {
-                print_logf(LOG_INFO, "SDR", "Created pulse: max_signal=%d, threshold=1000", max_signal);
-            }
-        }
-        
-        // If pulses were detected, process them
-        if (demod->pulse_data.num_pulses > 0) {
-            // Add timing and frequency info
-            calc_rssi_snr(cfg, &demod->pulse_data);
-            
-            if (g_cfg->verbosity >= LOG_INFO) {
-                print_logf(LOG_INFO, "SDR", "Found %u pulses, sending to server", 
-                          demod->pulse_data.num_pulses);
-            }
-            
-            // Send to server
-            client_pulse_handler(&demod->pulse_data);
-            
-            // Reset pulse data for next detection
-            pulse_data_clear(&demod->pulse_data);
-        }
-        
-        // Handle FSK pulses
-        if (demod->fsk_pulse_data.num_pulses > 0) {
-            calc_rssi_snr(cfg, &demod->fsk_pulse_data);
-            
-            if (g_cfg->verbosity >= LOG_INFO) {
-                print_logf(LOG_INFO, "SDR", "Found %u FSK pulses, sending to server", 
-                          demod->fsk_pulse_data.num_pulses);
-            }
-            
-            client_pulse_handler(&demod->fsk_pulse_data);
-            pulse_data_clear(&demod->fsk_pulse_data);
+            print_logf(LOG_INFO, "SDR", "Detected FSK package with %u pulses (avg_db=%.1f)", 
+                      fsk_pulse_data.num_pulses, avg_db);
+                      
+            r_device device = {.log_fn = log_device_handler, .output_ctx = cfg};
+            pulse_analyzer(&fsk_pulse_data, package_type, &device);
+            client_pulse_handler(&fsk_pulse_data);
         }
     }
     
