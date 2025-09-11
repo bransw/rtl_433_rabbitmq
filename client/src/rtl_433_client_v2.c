@@ -22,6 +22,7 @@
 #include "r_device.h"
 #include "pulse_data.h"
 #include "pulse_detect.h"
+#include "pulse_analyzer.h"
 #include "data.h"
 #include "list.h"
 #include "logger.h"
@@ -43,6 +44,94 @@ typedef struct {
 } client_stats_t;
 
 static client_stats_t g_stats = {0};
+
+/// Forward declaration  
+static void client_pulse_handler(pulse_data_t *pulse_data);
+
+/// Process CU8 file with proper IQ -> AM -> pulse pipeline
+static int process_cu8_file(const char *filename)
+{
+    FILE *file = fopen(filename, "rb");
+    if (!file) {
+        print_logf(LOG_ERROR, "Client", "Failed to open file: %s", filename);
+        return -1;
+    }
+    
+    print_logf(LOG_INFO, "Client", "Processing CU8 file: %s", filename);
+    
+    // Buffer for IQ samples (use rtl_433's default)
+    uint8_t iq_buf[DEFAULT_BUF_LENGTH];
+    uint16_t am_buf_temp[DEFAULT_BUF_LENGTH/2];  // Temporary AM buffer (envelope_detect output)
+    int16_t am_buf[DEFAULT_BUF_LENGTH/2];        // AM demodulated samples (pulse_detect input)
+    int16_t fm_buf[DEFAULT_BUF_LENGTH/2];        // FM demodulated samples (signed 16-bit)
+    
+    struct dm_state *demod = g_cfg->demod;
+    unsigned packages_found = 0;
+    
+    while (!exit_flag) {
+        size_t n_read = fread(iq_buf, 1, sizeof(iq_buf), file);
+        if (n_read == 0) {
+            if (feof(file)) {
+                break; // End of file
+            }
+            continue; // Read error, try again
+        }
+        
+        unsigned long n_samples = n_read / 2; // CU8 = 2 bytes per sample (I+Q)
+        if (n_samples == 0) continue;
+        
+        // Step 1: AM demodulation (IQ -> amplitude)
+        float avg_db = envelope_detect(iq_buf, am_buf_temp, n_samples);
+        
+        // Convert uint16_t to int16_t for pulse detection
+        for (unsigned long i = 0; i < n_samples; i++) {
+            am_buf[i] = (int16_t)am_buf_temp[i];
+        }
+        
+        print_logf(LOG_DEBUG, "Client", "Read %lu samples, avg_db=%.1f", n_samples, avg_db);
+        
+        // Step 2: Pulse detection (amplitude -> pulses)
+        pulse_data_t pulse_data = {0};
+        pulse_data_t fsk_pulse_data = {0};
+        
+        int package_type = pulse_detect_package(demod->pulse_detect, am_buf, fm_buf, n_samples, 
+                                               g_cfg->samp_rate, 0, &pulse_data, &fsk_pulse_data, 
+                                               FSK_PULSE_DETECT_OLD);
+                                               
+        if (package_type == PULSE_DATA_OOK && pulse_data.num_pulses > 0) {
+            packages_found++;
+            
+            // Step 3: Calculate signal metrics
+            calc_rssi_snr(g_cfg, &pulse_data);
+            
+            print_logf(LOG_INFO, "Client", "Detected OOK package #%u with %u pulses", 
+                      packages_found, pulse_data.num_pulses);
+                      
+            // Step 4: Use pulse_analyzer for detailed analysis (like rtl_433 -A)
+            r_device device = {.log_fn = log_device_handler, .output_ctx = g_cfg};
+            pulse_analyzer(&pulse_data, package_type, &device);
+            
+            // Step 5: Send analyzed pulse data via transport
+            client_pulse_handler(&pulse_data);
+        }
+        
+        if (package_type == PULSE_DATA_FSK && fsk_pulse_data.num_pulses > 0) {
+            packages_found++;
+            calc_rssi_snr(g_cfg, &fsk_pulse_data);
+            
+            print_logf(LOG_INFO, "Client", "Detected FSK package #%u with %u pulses", 
+                      packages_found, fsk_pulse_data.num_pulses);
+                      
+            r_device device = {.log_fn = log_device_handler, .output_ctx = g_cfg};
+            pulse_analyzer(&fsk_pulse_data, package_type, &device);
+            client_pulse_handler(&fsk_pulse_data);
+        }
+    }
+    
+    fclose(file);
+    print_logf(LOG_INFO, "Client", "File processing completed. Found %u packages", packages_found);
+    return 0;
+}
 
 /// Custom data acquired handler for rtl_433 integration  
 void client_data_acquired_handler(r_device *r_dev, data_t *data)
@@ -674,21 +763,17 @@ int main(int argc, char **argv)
     
     // Main processing loop
     if (g_cfg->in_files.len > 0) {
-        // File input mode - enable decoders for proper processing
-        print_log(LOG_INFO, "Client", "Setting up file processing with device decoders...");
+        // File input mode - use proper IQ -> AM -> pulse pipeline
+        print_log(LOG_INFO, "Client", "File input mode with proper demodulation pipeline");
         
-        // Enable all decoders for file processing
-        register_all_protocols(g_cfg, 0);
-        
-        // Start outputs to trigger our data_acquired_handler
-        start_outputs(g_cfg, NULL);
-        
-        print_log(LOG_WARNING, "Client", "File processing requires SDR flow - switching to SDR mode for file input");
-        print_log(LOG_INFO, "Client", "Files will be processed when SDR mode starts");
-        
-        // For now, just signal that we've set up for file processing
-        // The actual file processing will happen through the normal SDR flow
-        g_stats.signals_sent = 0;
+        // Process each input file
+        for (void **iter = g_cfg->in_files.elems; iter && *iter; ++iter) {
+            char *filename = *iter;
+            int result = process_cu8_file(filename);
+            if (result != 0) {
+                print_logf(LOG_ERROR, "Client", "Failed to process file: %s", filename);
+            }
+        }
     } else {
         // SDR input mode
         print_log(LOG_INFO, "Client", "Starting SDR input mode...");
