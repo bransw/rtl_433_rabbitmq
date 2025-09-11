@@ -91,40 +91,44 @@ static int process_cu8_file(const char *filename)
         print_logf(LOG_DEBUG, "Client", "Read %lu samples, avg_db=%.1f", n_samples, avg_db);
         
         // Step 2: Pulse detection (amplitude -> pulses)
-        pulse_data_t pulse_data = {0};
-        pulse_data_t fsk_pulse_data = {0};
-        
-        int package_type = pulse_detect_package(demod->pulse_detect, am_buf, fm_buf, n_samples, 
+        // Use same loop logic as rtl_433 to find ALL packages in buffer
+        int package_type = PULSE_DATA_OOK; // Just to get us started
+        while (package_type) {
+            pulse_data_t pulse_data = {0};
+            pulse_data_t fsk_pulse_data = {0};
+            
+            package_type = pulse_detect_package(demod->pulse_detect, am_buf, fm_buf, n_samples, 
                                                g_cfg->samp_rate, 0, &pulse_data, &fsk_pulse_data, 
                                                FSK_PULSE_DETECT_OLD);
                                                
-        if (package_type == PULSE_DATA_OOK && pulse_data.num_pulses > 0) {
-            packages_found++;
+            if (package_type == PULSE_DATA_OOK && pulse_data.num_pulses > 0) {
+                packages_found++;
+                
+                // Step 3: Calculate signal metrics
+                calc_rssi_snr(g_cfg, &pulse_data);
+                
+                print_logf(LOG_INFO, "Client", "Detected OOK package #%u with %u pulses", 
+                          packages_found, pulse_data.num_pulses);
+                          
+                // Step 4: Use pulse_analyzer for detailed analysis (like rtl_433 -A)
+                r_device device = {.log_fn = log_device_handler, .output_ctx = g_cfg};
+                pulse_analyzer(&pulse_data, package_type, &device);
+                
+                // Step 5: Send analyzed pulse data via transport
+                client_pulse_handler(&pulse_data);
+            }
             
-            // Step 3: Calculate signal metrics
-            calc_rssi_snr(g_cfg, &pulse_data);
-            
-            print_logf(LOG_INFO, "Client", "Detected OOK package #%u with %u pulses", 
-                      packages_found, pulse_data.num_pulses);
-                      
-            // Step 4: Use pulse_analyzer for detailed analysis (like rtl_433 -A)
-            r_device device = {.log_fn = log_device_handler, .output_ctx = g_cfg};
-            pulse_analyzer(&pulse_data, package_type, &device);
-            
-            // Step 5: Send analyzed pulse data via transport
-            client_pulse_handler(&pulse_data);
-        }
-        
-        if (package_type == PULSE_DATA_FSK && fsk_pulse_data.num_pulses > 0) {
-            packages_found++;
-            calc_rssi_snr(g_cfg, &fsk_pulse_data);
-            
-            print_logf(LOG_INFO, "Client", "Detected FSK package #%u with %u pulses", 
-                      packages_found, fsk_pulse_data.num_pulses);
-                      
-            r_device device = {.log_fn = log_device_handler, .output_ctx = g_cfg};
-            pulse_analyzer(&fsk_pulse_data, package_type, &device);
-            client_pulse_handler(&fsk_pulse_data);
+            if (package_type == PULSE_DATA_FSK && fsk_pulse_data.num_pulses > 0) {
+                packages_found++;
+                calc_rssi_snr(g_cfg, &fsk_pulse_data);
+                
+                print_logf(LOG_INFO, "Client", "Detected FSK package #%u with %u pulses", 
+                          packages_found, fsk_pulse_data.num_pulses);
+                          
+                r_device device = {.log_fn = log_device_handler, .output_ctx = g_cfg};
+                pulse_analyzer(&fsk_pulse_data, package_type, &device);
+                client_pulse_handler(&fsk_pulse_data);
+            }
         }
     }
     
@@ -301,38 +305,41 @@ static void client_sdr_callback(sdr_event_t *ev, void *ctx)
                       avg_db, am_buf[0], am_buf[1], am_buf[2], am_buf[3], am_buf[4]);
         }
         
-        // Step 2: Real pulse detection (same as file processing)
-        pulse_data_t pulse_data = {0};
-        pulse_data_t fsk_pulse_data = {0};
-        
-        int package_type = pulse_detect_package(demod->pulse_detect, am_buf, fm_buf, n_samples, 
+        // Step 2: Real pulse detection (same loop as rtl_433 and file processing)
+        int package_type = PULSE_DATA_OOK; // Just to get us started  
+        while (package_type) {
+            pulse_data_t pulse_data = {0};
+            pulse_data_t fsk_pulse_data = {0};
+            
+            package_type = pulse_detect_package(demod->pulse_detect, am_buf, fm_buf, n_samples, 
                                                cfg->samp_rate, 0, &pulse_data, &fsk_pulse_data, 
                                                FSK_PULSE_DETECT_OLD);
                                                
-        // Step 3: Process detected packages with pulse_analyzer (like rtl_433 -A)
-        if (package_type == PULSE_DATA_OOK && pulse_data.num_pulses > 0) {
-            calc_rssi_snr(cfg, &pulse_data);
+            // Step 3: Process detected packages with pulse_analyzer (like rtl_433 -A)
+            if (package_type == PULSE_DATA_OOK && pulse_data.num_pulses > 0) {
+                calc_rssi_snr(cfg, &pulse_data);
+                
+                print_logf(LOG_INFO, "SDR", "Detected OOK package with %u pulses (avg_db=%.1f)", 
+                          pulse_data.num_pulses, avg_db);
+                          
+                // Use pulse_analyzer for detailed analysis
+                r_device device = {.log_fn = log_device_handler, .output_ctx = cfg};
+                pulse_analyzer(&pulse_data, package_type, &device);
+                
+                // Send real analyzed data
+                client_pulse_handler(&pulse_data);
+            }
             
-            print_logf(LOG_INFO, "SDR", "Detected OOK package with %u pulses (avg_db=%.1f)", 
-                      pulse_data.num_pulses, avg_db);
-                      
-            // Use pulse_analyzer for detailed analysis
-            r_device device = {.log_fn = log_device_handler, .output_ctx = cfg};
-            pulse_analyzer(&pulse_data, package_type, &device);
-            
-            // Send real analyzed data
-            client_pulse_handler(&pulse_data);
-        }
-        
-        if (package_type == PULSE_DATA_FSK && fsk_pulse_data.num_pulses > 0) {
-            calc_rssi_snr(cfg, &fsk_pulse_data);
-            
-            print_logf(LOG_INFO, "SDR", "Detected FSK package with %u pulses (avg_db=%.1f)", 
-                      fsk_pulse_data.num_pulses, avg_db);
-                      
-            r_device device = {.log_fn = log_device_handler, .output_ctx = cfg};
-            pulse_analyzer(&fsk_pulse_data, package_type, &device);
-            client_pulse_handler(&fsk_pulse_data);
+            if (package_type == PULSE_DATA_FSK && fsk_pulse_data.num_pulses > 0) {
+                calc_rssi_snr(cfg, &fsk_pulse_data);
+                
+                print_logf(LOG_INFO, "SDR", "Detected FSK package with %u pulses (avg_db=%.1f)", 
+                          fsk_pulse_data.num_pulses, avg_db);
+                          
+                r_device device = {.log_fn = log_device_handler, .output_ctx = cfg};
+                pulse_analyzer(&fsk_pulse_data, package_type, &device);
+                client_pulse_handler(&fsk_pulse_data);
+            }
         }
     }
     
