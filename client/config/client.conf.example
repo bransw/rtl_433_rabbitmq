@@ -1,0 +1,151 @@
+# Example configuration for rtl_433_client
+
+# SDR device configuration
+[sdr]
+# RTL-SDR device (index or serial number)
+device = 0
+
+# Receive frequency in Hz
+frequency = 433920000
+
+# Sample rate in Hz  
+sample_rate = 250000
+
+# Gain (auto, or value in dB)
+gain = auto
+
+# Frequency correction in ppm
+ppm_error = 0
+
+# Additional device settings
+# settings = "direct_samp=1,offset_tune=1"
+
+# Demodulation settings
+[demodulation]
+# OOK detector mode (auto/classic/minmax)
+ook_mode = auto
+
+# FSK detector mode (auto/classic/minmax)  
+fsk_mode = auto
+
+# Detection level in dB (-1.0 to -30.0)
+level_limit = -12.0
+
+# Minimum detection level in dB
+min_level = -20.0
+
+# Minimum signal-to-noise ratio in dB
+min_snr = 6.0
+
+# Enable pulse analyzer
+analyze_pulses = false
+
+# Automatic level adjustment
+auto_level = true
+
+# Transport configuration
+[transport]
+# Transport type: http, mqtt, rabbitmq, tcp, udp
+type = http
+
+# Server address
+host = localhost
+
+# Server port
+port = 8080
+
+# Path for HTTP or topic for MQTT/queue for RabbitMQ
+topic_queue = /api/signals
+
+# Username (if required)
+username = 
+
+# Password (if required)
+password = 
+
+# Use SSL/TLS
+ssl_enabled = false
+
+# CA certificate path
+ca_cert_path = 
+
+# Client certificate path
+client_cert_path = 
+
+# Client private key path
+client_key_path = 
+
+# Input files settings
+[input]
+# List of files to read instead of SDR
+# files = ["/path/to/file1.cu8", "/path/to/file2.cs16"]
+
+# Logging settings
+[logging]
+# Verbosity level (0-4: error, warning, info, debug, trace)
+verbosity = 1
+
+# Log file (empty = stdout)
+log_file = 
+
+# Operation settings
+[operation]
+# Run time in seconds (0 = infinite)
+duration = 0
+
+# Batch processing mode
+batch_mode = false
+
+# Signal batch size
+batch_size = 10
+
+# Batch timeout in milliseconds
+batch_timeout_ms = 1000
+
+# Send raw pulse_data instead of processed
+raw_mode = false
+
+# Examples for different transports:
+
+# HTTP transport
+# [transport]
+# type = http
+# host = server.example.com
+# port = 8080
+# topic_queue = /api/rtl433/signals
+# username = rtl433_client
+# password = secret123
+# ssl_enabled = true
+
+# MQTT transport  
+# [transport]
+# type = mqtt
+# host = mqtt.example.com
+# port = 1883
+# topic_queue = rtl433/signals
+# username = mqtt_user
+# password = mqtt_pass
+# ssl_enabled = false
+
+# RabbitMQ transport
+# [transport]
+# type = rabbitmq
+# host = rabbitmq.example.com
+# port = 5672
+# topic_queue = rtl433_signals
+# exchange = rtl433_exchange
+# username = rmq_user
+# password = rmq_pass
+# ssl_enabled = false
+
+# TCP transport
+# [transport]
+# type = tcp
+# host = server.example.com
+# port = 9433
+
+# UDP transport
+# [transport]
+# type = udp
+# host = server.example.com
+# port = 9433

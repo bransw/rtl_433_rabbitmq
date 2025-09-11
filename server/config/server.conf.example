@@ -1,0 +1,269 @@
+# Example configuration for rtl_433_server
+
+# Input transports for receiving demodulated signals
+[input_transports]
+
+# HTTP server
+[input_transports.http]
+enabled = true
+host = 0.0.0.0
+port = 8080
+max_connections = 100
+timeout_ms = 30000
+ssl_enabled = false
+# ssl_cert_path = /path/to/cert.pem
+# ssl_key_path = /path/to/key.pem
+
+# MQTT subscriber
+[input_transports.mqtt]
+enabled = false
+host = localhost
+port = 1883
+topic_queue = rtl433/signals
+username = 
+password = 
+ssl_enabled = false
+# ca_cert_path = /path/to/ca.pem
+
+# RabbitMQ consumer
+[input_transports.rabbitmq]
+enabled = false
+host = localhost
+port = 5672
+queue = rtl433_signals
+exchange = rtl433_exchange
+username = guest
+password = guest
+ssl_enabled = false
+
+# TCP server
+[input_transports.tcp]
+enabled = false
+host = 0.0.0.0
+port = 9433
+max_connections = 50
+
+# UDP server
+[input_transports.udp]
+enabled = false
+host = 0.0.0.0
+port = 9433
+
+# Output queues for decoding results
+[output_queues]
+
+# Queue for successfully decoded devices
+[output_queues.ready]
+type = file
+name = ready_devices
+file_path = /var/log/rtl433/ready_devices.jsonl
+batch_size = 100
+batch_timeout_ms = 5000
+max_queue_size = 10000
+
+# Alternative - MQTT output
+# [output_queues.ready]
+# type = mqtt
+# name = ready_devices
+# host = localhost
+# port = 1883
+# topic_queue = rtl433/devices/ready
+# username = 
+# password = 
+
+# Alternative - HTTP webhook
+# [output_queues.ready]
+# type = http
+# name = ready_devices
+# host = webhook.example.com
+# port = 443
+# topic_queue = /api/rtl433/devices
+# ssl_enabled = true
+
+# Queue for unknown signals
+[output_queues.unknown]
+type = database
+name = unknown_signals
+db_path = /var/lib/rtl433/unknown_signals.db
+batch_size = 50
+batch_timeout_ms = 10000
+max_queue_size = 5000
+
+# Alternative - file
+# [output_queues.unknown]
+# type = file
+# name = unknown_signals
+# file_path = /var/log/rtl433/unknown_signals.jsonl
+
+# Device decoder configuration
+[decoders]
+# Enable all decoders by default
+default_enabled = true
+
+# List of disabled decoders (by ID)
+disabled_decoders = [
+    101,  # Dish remote 6.3 (frequent false positives)
+    106,  # Wireless M-Bus, Mode R (rarely used)
+    151   # Visonic powercode (may conflict)
+]
+
+# Special settings for specific decoders
+[decoders.40]  # Acurite 5n1, 592TXR, Atlas
+enabled = true
+priority = 1
+
+[decoders.176]  # BlueLine Power Monitor
+enabled = true
+parameters = "auto"
+priority = 2
+
+[decoders.12]  # Oregon Scientific
+enabled = true
+priority = 1
+
+[decoders.18]  # Fine Offset WH2
+enabled = true
+priority = 1
+
+# Signal processing settings
+[processing]
+# Maximum number of concurrently processed signals
+max_concurrent_signals = 100
+
+# Signal processing timeout in milliseconds
+signal_timeout_ms = 2000
+
+# Enable batch processing
+batch_processing = true
+
+# Batch size for processing
+batch_size = 20
+
+# Batch timeout in milliseconds
+batch_timeout_ms = 1000
+
+# Number of worker threads for decoding
+worker_threads = 4
+
+# Number of I/O threads for queues
+io_threads = 2
+
+# Queue buffer size
+queue_buffer_size = 1000
+
+# Database for unknown signals
+[database]
+# SQLite database path
+unknown_signals_db_path = /var/lib/rtl433/unknown_signals.db
+
+# Record retention time in days
+retention_days = 30
+
+# Maximum database size in MB
+max_size_mb = 1024
+
+# Automatic cleanup of old records
+auto_cleanup = true
+
+# Web interface for monitoring
+[web_interface]
+enabled = true
+host = 0.0.0.0
+port = 8081
+static_path = /usr/share/rtl433_server/web
+ssl_enabled = false
+
+# Logging settings
+[logging]
+# Verbosity level (0-4: error, warning, info, debug, trace)
+verbosity = 2
+
+# Log file
+log_file = /var/log/rtl433/server.log
+
+# Log rotation
+log_rotation = true
+
+# Maximum log file size in MB
+log_max_size_mb = 100
+
+# Maximum number of log files
+log_max_files = 5
+
+# Monitoring and statistics
+[monitoring]
+# Enable statistics collection
+stats_enabled = true
+
+# Statistics output interval in seconds
+stats_interval_sec = 60
+
+# Statistics output file
+stats_output_file = /var/log/rtl433/stats.json
+
+# Daemon mode settings
+[daemon]
+# Run in daemon mode
+daemon_mode = false
+
+# PID file
+pid_file = /var/run/rtl433_server.pid
+
+# User for daemon operation
+user = rtl433
+
+# Group for daemon operation
+group = rtl433
+
+# Configuration examples for different scenarios:
+
+# High-performance configuration
+# [processing]
+# max_concurrent_signals = 500
+# worker_threads = 8
+# io_threads = 4
+# batch_processing = true
+# batch_size = 50
+# queue_buffer_size = 5000
+
+# Configuration for unknown protocol analysis
+# [processing]
+# signal_timeout_ms = 5000
+# [decoders]
+# default_enabled = false
+# disabled_decoders = []
+# [output_queues.unknown]
+# type = file
+# file_path = /var/log/rtl433/analysis.jsonl
+# batch_size = 1
+
+# Configuration for Home Assistant integration
+# [output_queues.ready]
+# type = mqtt
+# host = homeassistant.local
+# port = 1883
+# topic_queue = homeassistant/sensor/rtl433
+# username = hass_user
+# password = hass_pass
+
+# Distributed configuration with multiple outputs
+# [output_queues]
+# [output_queues.ready_mqtt]
+# type = mqtt
+# name = ready_mqtt
+# host = mqtt.example.com
+# port = 1883
+# topic_queue = sensors/rtl433/ready
+# 
+# [output_queues.ready_webhook]
+# type = http
+# name = ready_webhook
+# host = api.example.com
+# port = 443
+# topic_queue = /webhooks/rtl433
+# ssl_enabled = true
+#
+# [output_queues.ready_file]
+# type = file
+# name = ready_file
+# file_path = /backup/rtl433_ready.jsonl

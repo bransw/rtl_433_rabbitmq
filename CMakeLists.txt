@@ -13,6 +13,14 @@ endif()
 
 project(rtl433 C)
 
+########################################################################
+# Split Architecture Options
+########################################################################
+option(BUILD_CLIENT "Build rtl_433_client for signal demodulation" OFF)
+option(BUILD_SERVER "Build rtl_433_server for device decoding" OFF)
+option(ENABLE_MQTT "Enable MQTT transport for split architecture" OFF)
+option(ENABLE_RABBITMQ "Enable RabbitMQ transport for split architecture" OFF)
+
 #select the release build type by default to get optimization flags
 if(NOT CMAKE_BUILD_TYPE)
    set(CMAKE_BUILD_TYPE "Release")
@@ -392,3 +400,276 @@ INSTALL(
 install(DIRECTORY man
     DESTINATION share
     PATTERN ".md" EXCLUDE)
+
+########################################################################
+# Split Architecture Dependencies
+########################################################################
+if(BUILD_CLIENT OR BUILD_SERVER)
+    # Common dependencies for split architecture
+    pkg_check_modules(JSON_C json-c)
+    if(NOT JSON_C_FOUND)
+        message(FATAL_ERROR "json-c library is required for split architecture")
+    endif()
+    
+    # Client dependencies
+    if(BUILD_CLIENT)
+        find_package(CURL REQUIRED)
+        
+        # MQTT support for client
+        if(ENABLE_MQTT)
+            find_path(PAHO_MQTT_INCLUDE_DIR MQTTClient.h)
+            find_library(PAHO_MQTT_LIBRARY paho-mqtt3c)
+            if(PAHO_MQTT_INCLUDE_DIR AND PAHO_MQTT_LIBRARY)
+                add_definitions(-DENABLE_MQTT)
+            else()
+                message(WARNING "paho-mqtt library not found - MQTT transport disabled")
+                set(ENABLE_MQTT OFF)
+            endif()
+        endif()
+        
+        # RabbitMQ support for client
+        if(ENABLE_RABBITMQ)
+            find_path(RABBITMQ_INCLUDE_DIR amqp.h)
+            find_library(RABBITMQ_LIBRARY rabbitmq)
+            if(RABBITMQ_INCLUDE_DIR AND RABBITMQ_LIBRARY)
+                add_definitions(-DENABLE_RABBITMQ)
+            else()
+                message(WARNING "rabbitmq library not found - RabbitMQ transport disabled")
+                set(ENABLE_RABBITMQ OFF)
+            endif()
+        endif()
+    endif()
+    
+    # Server dependencies
+    if(BUILD_SERVER)
+        pkg_check_modules(SQLITE3 sqlite3)
+        if(NOT SQLITE3_FOUND)
+            message(FATAL_ERROR "sqlite3 library is required for server")
+        endif()
+        
+        find_package(Threads REQUIRED)
+    endif()
+endif()
+
+########################################################################
+# Common source files for split architecture
+########################################################################
+if(BUILD_CLIENT OR BUILD_SERVER)
+    # Base sources for both client and server (no device decoders)
+    set(BASE_SOURCES
+        src/abuf.c
+        src/baseband.c
+        src/bit_util.c
+        src/bitbuffer.c
+        src/data.c
+        src/decoder_util.c
+        src/fileformat.c
+        src/jsmn.c
+        src/list.c
+        src/logger.c
+        src/pulse_analyzer.c
+        src/pulse_data.c
+        src/pulse_detect_fsk.c
+        src/pulse_detect.c
+        src/pulse_slicer.c
+        src/r_util.c
+        src/compat_paths.c
+        src/compat_time.c
+        src/confparse.c
+        src/optparse.c
+    )
+    
+    # Client uses the main rtl_433 library
+    set(CLIENT_CORE_SOURCES
+        # Client will link with libr_433.a - no need to rebuild sources
+    )
+    
+    # Server-specific sources (includes device decoders)
+    set(SERVER_CORE_SOURCES
+        ${BASE_SOURCES}
+        src/r_api.c
+        src/data_tag.c
+        src/am_analyze.c
+    )
+    
+    # Add getopt for Windows
+    if(WIN32)
+        list(APPEND CLIENT_CORE_SOURCES src/getopt/getopt.c)
+        list(APPEND SERVER_CORE_SOURCES src/getopt/getopt.c)
+    endif()
+endif()
+
+########################################################################
+# rtl_433_client
+########################################################################
+if(BUILD_CLIENT)
+    message(STATUS "Building rtl_433_client")
+    
+    set(CLIENT_SOURCES
+        client/src/rtl_433_client_v2.c
+        client/src/client_transport.c
+        # client/src/client_stubs.c  # Removed: using real SDR libraries
+    )
+    
+    add_executable(rtl_433_client ${CLIENT_SOURCES})
+    
+    # Client depends on the main rtl_433 library
+    add_dependencies(rtl_433_client r_433)
+    
+    target_include_directories(rtl_433_client PRIVATE 
+        include
+        client/src
+        ${JSON_C_INCLUDE_DIRS}
+        ${CURL_INCLUDE_DIRS}
+    )
+    
+    target_link_libraries(rtl_433_client 
+        r_433                    # Link with the main rtl_433 library
+        ${SDR_LIBRARIES}         # Includes OpenSSL and other dependencies
+        ${NET_LIBRARIES}         # Network libraries (ws2_32, etc.)
+        ${CMAKE_THREAD_LIBS_INIT} # Threading support
+        ${JSON_C_LIBRARIES}
+        ${CURL_LIBRARIES}
+        m
+    )
+    
+    # Add pthread flags like main rtl_433
+    if(THREADS_HAVE_PTHREAD_ARG)
+        set_target_properties(rtl_433_client PROPERTIES COMPILE_OPTIONS "-pthread")
+        set_target_properties(rtl_433_client PROPERTIES INTERFACE_COMPILE_OPTIONS "-pthread")
+    endif()
+    
+    # Client uses real SDR libraries
+    # target_compile_definitions(rtl_433_client PRIVATE RTL433_CLIENT_STUBS)
+    
+    # Use real SDR libraries:
+    if(LIBRTLSDR_FOUND)
+        target_include_directories(rtl_433_client PRIVATE ${LIBRTLSDR_INCLUDE_DIRS})
+        target_link_libraries(rtl_433_client ${LIBRTLSDR_LIBRARIES})
+        target_compile_options(rtl_433_client PRIVATE ${LIBRTLSDR_CFLAGS_OTHER})
+        target_compile_definitions(rtl_433_client PRIVATE RTLSDR)
+        message(STATUS "rtl_433_client: RTL-SDR support enabled")
+    endif()
+    
+    if(SOAPYSDR_FOUND)
+        target_include_directories(rtl_433_client PRIVATE ${SOAPYSDR_INCLUDE_DIRS})
+        target_link_libraries(rtl_433_client PRIVATE ${SOAPYSDR_LIBRARIES})
+        target_compile_definitions(rtl_433_client PRIVATE SOAPYSDR)
+        message(STATUS "rtl_433_client: SoapySDR support enabled")
+    endif()
+    
+    if(ENABLE_MQTT AND PAHO_MQTT_INCLUDE_DIR AND PAHO_MQTT_LIBRARY)
+        target_include_directories(rtl_433_client PRIVATE ${PAHO_MQTT_INCLUDE_DIR})
+        target_link_libraries(rtl_433_client ${PAHO_MQTT_LIBRARY})
+    endif()
+    
+    if(ENABLE_RABBITMQ AND RABBITMQ_INCLUDE_DIR AND RABBITMQ_LIBRARY)
+        target_include_directories(rtl_433_client PRIVATE ${RABBITMQ_INCLUDE_DIR})
+        target_link_libraries(rtl_433_client ${RABBITMQ_LIBRARY})
+    endif()
+    
+    install(TARGETS rtl_433_client DESTINATION bin)
+endif()
+
+########################################################################
+# rtl_433_server
+########################################################################
+if(BUILD_SERVER)
+    message(STATUS "Building rtl_433_server")
+    
+    # Get all device decoders
+    file(GLOB DEVICE_SOURCES "src/devices/*.c")
+    
+    set(SERVER_SOURCES
+        ${SERVER_CORE_SOURCES}
+        ${DEVICE_SOURCES}
+        server/src/rtl_433_server.c
+        server/src/server_transport.c
+        server/src/server_config.c
+        server/src/device_decoder.c
+        server/src/queue_manager.c
+        server/src/signal_processor.c
+    )
+    
+    add_executable(rtl_433_server ${SERVER_SOURCES})
+    
+    target_include_directories(rtl_433_server PRIVATE 
+        include
+        server/src
+        ${JSON_C_INCLUDE_DIRS}
+        ${SQLITE3_INCLUDE_DIRS}
+    )
+    
+    target_link_libraries(rtl_433_server 
+        ${JSON_C_LIBRARIES}
+        ${SQLITE3_LIBRARIES}
+        ${CMAKE_THREAD_LIBS_INIT}
+        m
+    )
+    
+    if(ENABLE_MQTT AND PAHO_MQTT_INCLUDE_DIR AND PAHO_MQTT_LIBRARY)
+        target_include_directories(rtl_433_server PRIVATE ${PAHO_MQTT_INCLUDE_DIR})
+        target_link_libraries(rtl_433_server ${PAHO_MQTT_LIBRARY})
+    endif()
+    
+    if(ENABLE_RABBITMQ AND RABBITMQ_INCLUDE_DIR AND RABBITMQ_LIBRARY)
+        target_include_directories(rtl_433_server PRIVATE ${RABBITMQ_INCLUDE_DIR})
+        target_link_libraries(rtl_433_server ${RABBITMQ_LIBRARY})
+    endif()
+    
+    install(TARGETS rtl_433_server DESTINATION bin)
+    
+    # Install configuration files
+    install(DIRECTORY server/config/ 
+            DESTINATION etc/rtl_433_server
+            FILES_MATCHING PATTERN "*.conf*")
+endif()
+
+########################################################################
+# Environment detection and status
+########################################################################
+if(BUILD_CLIENT OR BUILD_SERVER)
+    # Detect WSL environment
+    if(EXISTS "/proc/version")
+        file(READ "/proc/version" PROC_VERSION)
+        if(PROC_VERSION MATCHES "Microsoft")
+            message(STATUS "WSL environment detected")
+            set(WSL_DETECTED TRUE)
+        else()
+            set(WSL_DETECTED FALSE)
+        endif()
+    else()
+        set(WSL_DETECTED FALSE)
+    endif()
+    
+    message(STATUS "")
+    message(STATUS "RTL433 Split Architecture Configuration:")
+    message(STATUS "  Build client: ${BUILD_CLIENT}")
+    message(STATUS "  Build server: ${BUILD_SERVER}")
+    message(STATUS "  MQTT support: ${ENABLE_MQTT}")
+    message(STATUS "  RabbitMQ support: ${ENABLE_RABBITMQ}")
+    if(BUILD_CLIENT)
+        message(STATUS "  RTL-SDR support: ${LIBRTLSDR_FOUND}")
+        message(STATUS "  SoapySDR support: ${SOAPYSDR_FOUND}")
+    endif()
+    message(STATUS "  WSL detected: ${WSL_DETECTED}")
+    
+    if(WSL_DETECTED AND BUILD_CLIENT AND LIBRTLSDR_FOUND)
+        message(STATUS "")
+        message(STATUS "WSL USB Setup Required:")
+        message(STATUS "  1. Install usbipd on Windows: winget install usbipd")
+        message(STATUS "  2. Attach RTL-SDR: usbipd wsl attach --busid <busid>")
+        message(STATUS "  3. Test device: rtl_test")
+    endif()
+    
+    message(STATUS "")
+    message(STATUS "For dependency installation instructions, see README_SPLIT.md")
+    message(STATUS "")
+    
+    # Install split architecture documentation
+    install(FILES 
+        README_SPLIT.md
+        USAGE_EXAMPLES.md
+        DESTINATION share/doc/rtl433_split
+    )
+endif()
