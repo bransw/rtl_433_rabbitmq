@@ -771,8 +771,13 @@ int main(int argc, char **argv)
         print_logf(LOG_INFO, "Client", "Frequency: %.1f MHz", g_cfg->center_frequency / 1e6);
         print_logf(LOG_INFO, "Client", "Sample rate: %u Hz", g_cfg->samp_rate);
         
-        // Enable all decoders for SDR processing
+        // Enable all decoders for SDR processing (temporarily reduce verbosity)
+        int saved_verbosity = g_cfg->verbosity;
+        g_cfg->verbosity = LOG_WARNING; // Suppress protocol registration logs
         register_all_protocols(g_cfg, 0);
+        g_cfg->verbosity = saved_verbosity; // Restore original verbosity
+        
+        print_logf(LOG_INFO, "Client", "Registered %zu device protocols for signal decoding", g_cfg->demod->r_devs.len);
         
         // Start outputs to trigger our data_acquired_handler
         start_outputs(g_cfg, NULL);
