@@ -1,0 +1,15 @@
+Server: rtl_433_server started
+Server: Server ready for operation
+Server: Received signal 15, shutting down...
+Server: Server shutting down...
+Server: === Runtime Statistics ===
+Server: Uptime: 2333 sec
+Server: Signals received: 0
+Server: Signals processed: 0
+Server: Devices decoded: 0
+Server: Unknown signals: 0
+Server: Processing errors: 0
+Server: Rate: 0.0 signals/min
+Server: Recognition rate: -nan%
+Server: Queue statistics: {"total_messages":0,"uptime":2333}
+Server: rtl_433_server finished with code 0

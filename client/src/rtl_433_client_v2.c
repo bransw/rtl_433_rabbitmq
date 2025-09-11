@@ -374,6 +374,135 @@ static int parse_client_args(int argc, char **argv, transport_config_t *transpor
                     }
                     transport_cfg->port = 8080;
                 }
+            } else if (strncmp(url, "mqtt://", 7) == 0) {
+                transport_cfg->type = TRANSPORT_MQTT;
+                url += 7; // Skip "mqtt://"
+                
+                // Parse user:password@host:port/topic format
+                char *at_sign = strchr(url, '@');
+                char *host_start = url;
+                
+                if (at_sign) {
+                    // Extract credentials
+                    *at_sign = '\0';
+                    char *colon = strchr(url, ':');
+                    if (colon) {
+                        *colon = '\0';
+                        transport_cfg->username = strdup(url);
+                        transport_cfg->password = strdup(colon + 1);
+                        *colon = ':'; // Restore
+                    } else {
+                        transport_cfg->username = strdup(url);
+                    }
+                    host_start = at_sign + 1;
+                    *at_sign = '@'; // Restore
+                }
+                
+                char *colon = strchr(host_start, ':');
+                char *slash = strchr(host_start, '/');
+                
+                if (colon && (!slash || colon < slash)) {
+                    *colon = '\0';
+                    transport_cfg->host = strdup(host_start);
+                    
+                    char *port_str = colon + 1;
+                    if (slash) {
+                        *slash = '\0';
+                        transport_cfg->port = atoi(port_str);
+                        transport_cfg->topic_queue = strdup(slash + 1);
+                        *slash = '/'; // Restore
+                    } else {
+                        transport_cfg->port = atoi(port_str);
+                        transport_cfg->topic_queue = strdup("rtl_433/signals");
+                    }
+                    *colon = ':'; // Restore
+                } else {
+                    if (slash) {
+                        *slash = '\0';
+                        transport_cfg->host = strdup(host_start);
+                        transport_cfg->topic_queue = strdup(slash + 1);
+                        *slash = '/'; // Restore
+                    } else {
+                        transport_cfg->host = strdup(host_start);
+                        transport_cfg->topic_queue = strdup("rtl_433/signals");
+                    }
+                    transport_cfg->port = 1883; // Default MQTT port
+                }
+            } else if (strncmp(url, "amqp://", 7) == 0) {
+                transport_cfg->type = TRANSPORT_RABBITMQ;
+                url += 7; // Skip "amqp://"
+                
+                // Parse user:password@host:port/exchange/queue format
+                char *at_sign = strchr(url, '@');
+                char *host_start = url;
+                
+                if (at_sign) {
+                    // Extract credentials
+                    *at_sign = '\0';
+                    char *colon = strchr(url, ':');
+                    if (colon) {
+                        *colon = '\0';
+                        transport_cfg->username = strdup(url);
+                        transport_cfg->password = strdup(colon + 1);
+                        *colon = ':'; // Restore
+                    } else {
+                        transport_cfg->username = strdup(url);
+                    }
+                    host_start = at_sign + 1;
+                    *at_sign = '@'; // Restore
+                }
+                
+                char *colon = strchr(host_start, ':');
+                char *slash = strchr(host_start, '/');
+                
+                if (colon && (!slash || colon < slash)) {
+                    *colon = '\0';
+                    transport_cfg->host = strdup(host_start);
+                    
+                    char *port_str = colon + 1;
+                    if (slash) {
+                        *slash = '\0';
+                        transport_cfg->port = atoi(port_str);
+                        
+                        // Parse exchange/queue
+                        char *exchange_queue = slash + 1;
+                        char *queue_slash = strchr(exchange_queue, '/');
+                        if (queue_slash) {
+                            *queue_slash = '\0';
+                            transport_cfg->topic_queue = strdup(exchange_queue);
+                            // Queue part will be handled in transport init
+                            *queue_slash = '/'; // Restore
+                        } else {
+                            transport_cfg->topic_queue = strdup(exchange_queue);
+                        }
+                        *slash = '/'; // Restore
+                    } else {
+                        transport_cfg->port = atoi(port_str);
+                        transport_cfg->topic_queue = strdup("rtl_433");
+                    }
+                    *colon = ':'; // Restore
+                } else {
+                    if (slash) {
+                        *slash = '\0';
+                        transport_cfg->host = strdup(host_start);
+                        
+                        // Parse exchange/queue
+                        char *exchange_queue = slash + 1;
+                        char *queue_slash = strchr(exchange_queue, '/');
+                        if (queue_slash) {
+                            *queue_slash = '\0';
+                            transport_cfg->topic_queue = strdup(exchange_queue);
+                            *queue_slash = '/'; // Restore
+                        } else {
+                            transport_cfg->topic_queue = strdup(exchange_queue);
+                        }
+                        *slash = '/'; // Restore
+                    } else {
+                        transport_cfg->host = strdup(host_start);
+                        transport_cfg->topic_queue = strdup("rtl_433");
+                    }
+                    transport_cfg->port = 5672; // Default AMQP port
+                }
             }
             
             // Remove -T and URL from argv for rtl_433 parsing
@@ -386,8 +515,8 @@ static int parse_client_args(int argc, char **argv, transport_config_t *transpor
         else if (strcmp(argv[i], "--transport-help") == 0) {
             printf("Transport options:\n");
             printf("  http://host:port/path   HTTP transport (default)\n");
-            printf("  mqtt://host:port        MQTT transport (if enabled)\n");
-            printf("  amqp://host:port        RabbitMQ transport (if enabled)\n");
+            printf("  mqtt://[user:pass@]host[:port][/topic]  MQTT transport (if enabled)\n");
+            printf("  amqp://[user:pass@]host[:port][/exchange[/queue]]  RabbitMQ transport (if enabled)\n");
             exit(0);
         }
     }

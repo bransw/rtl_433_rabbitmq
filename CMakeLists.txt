@@ -430,7 +430,7 @@ if(BUILD_CLIENT OR BUILD_SERVER)
         # RabbitMQ support for client
         if(ENABLE_RABBITMQ)
             find_path(RABBITMQ_INCLUDE_DIR amqp.h)
-            find_library(RABBITMQ_LIBRARY rabbitmq)
+            find_library(RABBITMQ_LIBRARY NAMES rabbitmq librabbitmq)
             if(RABBITMQ_INCLUDE_DIR AND RABBITMQ_LIBRARY)
                 add_definitions(-DENABLE_RABBITMQ)
             else()
