@@ -23,11 +23,11 @@
 #include "pulse_data.h"
 #include "pulse_detect.h"
 #include "pulse_analyzer.h"
+#include "baseband.h"
 #include "data.h"
 #include "list.h"
 #include "logger.h"
 #include "sdr.h"
-#include "baseband.h"
 #include "compat_time.h"
 #include "client_transport.h"
 
@@ -88,7 +88,23 @@ static int process_cu8_file(const char *filename)
             am_buf[i] = (int16_t)am_buf_temp[i];
         }
         
+        // Step 1.5: FM demodulation (IQ -> frequency) for FSK signals
+        if (demod->enable_FM_demod) {
+            float low_pass = demod->low_pass != 0.0f ? demod->low_pass : 0.1f;
+            baseband_demod_FM(&demod->demod_FM_state, iq_buf, fm_buf, n_samples, g_cfg->samp_rate, low_pass);
+        } else {
+            // Zero out FM buffer if not using FM demod
+            memset(fm_buf, 0, n_samples * sizeof(int16_t));
+        }
+        
         print_logf(LOG_DEBUG, "Client", "Read %lu samples, avg_db=%.1f", n_samples, avg_db);
+        
+        // Debug: Print first few AM samples
+        if (packages_found < 2) {
+            print_logf(LOG_DEBUG, "Client", "AM samples: %d %d %d %d %d %d %d %d", 
+                      am_buf[0], am_buf[1], am_buf[2], am_buf[3], 
+                      am_buf[4], am_buf[5], am_buf[6], am_buf[7]);
+        }
         
         // Step 2: Pulse detection (amplitude -> pulses)
         // Use same loop logic as rtl_433 to find ALL packages in buffer
@@ -97,9 +113,17 @@ static int process_cu8_file(const char *filename)
             pulse_data_t pulse_data = {0};
             pulse_data_t fsk_pulse_data = {0};
             
+            // Select FSK pulse detector like original rtl_433
+            unsigned fpdm = g_cfg->fsk_pulse_detect_mode;
+            if (g_cfg->fsk_pulse_detect_mode == FSK_PULSE_DETECT_AUTO) {
+                if (g_cfg->center_frequency > FSK_PULSE_DETECTOR_LIMIT)
+                    fpdm = FSK_PULSE_DETECT_NEW;
+                else
+                    fpdm = FSK_PULSE_DETECT_OLD;
+            }
+            
             package_type = pulse_detect_package(demod->pulse_detect, am_buf, fm_buf, n_samples, 
-                                               g_cfg->samp_rate, 0, &pulse_data, &fsk_pulse_data, 
-                                               FSK_PULSE_DETECT_OLD);
+                                               g_cfg->samp_rate, 0, &pulse_data, &fsk_pulse_data, fpdm);
                                                
             if (package_type == PULSE_DATA_OOK && pulse_data.num_pulses > 0) {
                 packages_found++;
@@ -298,11 +322,22 @@ static void client_sdr_callback(sdr_event_t *ev, void *ctx)
             for (unsigned long i = 0; i < n_samples; i++) {
                 am_buf[i] = (int16_t)am_buf_temp[i];
             }
+            
+            // FM demodulation for FSK signals
+            if (demod->enable_FM_demod) {
+                float low_pass = demod->low_pass != 0.0f ? demod->low_pass : 0.1f;
+                baseband_demod_FM(&demod->demod_FM_state, iq_buf, fm_buf, n_samples, cfg->samp_rate, low_pass);
+            } else {
+                // Zero out FM buffer if not using FM demod
+                memset(fm_buf, 0, n_samples * sizeof(int16_t));
+            }
         }
         
         if (data_callbacks <= 3) {
             print_logf(LOG_INFO, "SDR", "AM demodulation: avg_db=%.1f, first values: %d %d %d %d %d", 
                       avg_db, am_buf[0], am_buf[1], am_buf[2], am_buf[3], am_buf[4]);
+            print_logf(LOG_INFO, "SDR", "FM demodulation: first values: %d %d %d %d %d", 
+                      fm_buf[0], fm_buf[1], fm_buf[2], fm_buf[3], fm_buf[4]);
         }
         
         // Step 2: Real pulse detection (same loop as rtl_433 and file processing)
@@ -311,9 +346,22 @@ static void client_sdr_callback(sdr_event_t *ev, void *ctx)
             pulse_data_t pulse_data = {0};
             pulse_data_t fsk_pulse_data = {0};
             
+            // Select FSK pulse detector like original rtl_433
+            unsigned fpdm = cfg->fsk_pulse_detect_mode;
+            if (cfg->fsk_pulse_detect_mode == FSK_PULSE_DETECT_AUTO) {
+                if (cfg->center_frequency > FSK_PULSE_DETECTOR_LIMIT)
+                    fpdm = FSK_PULSE_DETECT_NEW;
+                else
+                    fpdm = FSK_PULSE_DETECT_OLD;
+            }
+            
             package_type = pulse_detect_package(demod->pulse_detect, am_buf, fm_buf, n_samples, 
-                                               cfg->samp_rate, 0, &pulse_data, &fsk_pulse_data, 
-                                               FSK_PULSE_DETECT_OLD);
+                                               cfg->samp_rate, 0, &pulse_data, &fsk_pulse_data, fpdm);
+            
+            if (data_callbacks <= 3) {
+                print_logf(LOG_DEBUG, "SDR", "Pulse detection: type=%d, OOK_pulses=%u, FSK_pulses=%u", 
+                          package_type, pulse_data.num_pulses, fsk_pulse_data.num_pulses);
+            }
                                                
             // Step 3: Process detected packages with pulse_analyzer (like rtl_433 -A)
             if (package_type == PULSE_DATA_OOK && pulse_data.num_pulses > 0) {
@@ -679,11 +727,32 @@ int main(int argc, char **argv)
     // Add null output to suppress normal rtl_433 output
     add_null_output(g_cfg, NULL);
     
+    // Debug: Print pulse detector configuration
+    if (g_cfg->demod && g_cfg->demod->pulse_detect) {
+        print_log(LOG_DEBUG, "Client", "Pulse detector initialized successfully");
+    } else {
+        print_log(LOG_WARNING, "Client", "Pulse detector not properly initialized!");
+    }
+    
     // Set client-specific configuration
-    g_cfg->verbosity = LOG_INFO;  // Default verbosity
+    g_cfg->verbosity = LOG_DEBUG;  // Default verbosity (increased for debugging)
     g_cfg->center_frequency = 433920000;  // Default frequency (433.92 MHz)
     g_cfg->dev_query = strdup("0");  // Default device
     g_cfg->gain_str = strdup("auto");  // Default gain
+    g_cfg->fsk_pulse_detect_mode = FSK_PULSE_DETECT_AUTO;  // Use auto FSK detector
+    
+    // Configure demodulation (enable both AM and FM for full signal detection)
+    if (g_cfg->demod) {
+        g_cfg->demod->enable_FM_demod = 1;  // Enable FM for FSK detection
+        print_log(LOG_DEBUG, "Client", "FM demodulation enabled for FSK signals (AM+FM dual processing)");
+        
+        // Set pulse detector levels (critical for detection!)
+        pulse_detect_set_levels(g_cfg->demod->pulse_detect, g_cfg->demod->use_mag_est, 
+                              g_cfg->demod->level_limit, g_cfg->demod->min_level, 
+                              g_cfg->demod->min_snr, g_cfg->demod->detect_verbosity);
+        print_logf(LOG_DEBUG, "Client", "Pulse detector levels set: level_limit=%.1f, min_level=%.1f, min_snr=%.1f", 
+                  g_cfg->demod->level_limit, g_cfg->demod->min_level, g_cfg->demod->min_snr);
+    }
     
     // Parse remaining arguments using rtl_433's parser
     // Note: We need to implement rtl_433 argument parsing here
