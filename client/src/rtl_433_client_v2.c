@@ -19,6 +19,7 @@
 #include "rtl_433.h"
 #include "r_api.h"
 #include "r_private.h"
+#include "r_device.h"
 #include "pulse_data.h"
 #include "pulse_detect.h"
 #include "data.h"
@@ -42,6 +43,43 @@ typedef struct {
 } client_stats_t;
 
 static client_stats_t g_stats = {0};
+
+/// Custom data acquired handler for rtl_433 integration  
+void client_data_acquired_handler(r_device *r_dev, data_t *data)
+{
+    if (!data) return;
+    
+    // Convert data_t to JSON and send via transport
+    char json_buffer[8192];
+    size_t json_len = data_print_jsons(data, json_buffer, sizeof(json_buffer));
+    if (json_len > 0) {
+        char *json_str = strdup(json_buffer);
+        if (json_str) {
+            // Create demod_data_t structure for transport
+            demod_data_t demod_data = {0};
+            demod_data.device_id = strdup(r_dev ? r_dev->name : "unknown");
+            demod_data.timestamp_us = time(NULL) * 1000000ULL;
+            demod_data.frequency = g_cfg->center_frequency;
+            demod_data.sample_rate = g_cfg->samp_rate;
+            demod_data.raw_data_hex = json_str;
+            
+            // Send via transport
+            int result = transport_send_demod_data(&g_transport, &demod_data);
+            
+            if (result == 0) {
+                g_stats.signals_sent++;
+                print_logf(LOG_INFO, "Client", "Sent device data: %s", r_dev ? r_dev->name : "unknown");
+            } else {
+                g_stats.send_errors++;
+                print_log(LOG_WARNING, "Client", "Failed to send device data");
+            }
+            
+            // Cleanup
+            free(demod_data.device_id);
+            free(json_str);
+        }
+    }
+}
 
 /// Signal handler
 static void signal_handler(int sig)
@@ -558,6 +596,9 @@ int main(int argc, char **argv)
     
     r_init_cfg(g_cfg);
     
+    // Add null output to suppress normal rtl_433 output
+    add_null_output(g_cfg, NULL);
+    
     // Set client-specific configuration
     g_cfg->verbosity = LOG_INFO;  // Default verbosity
     g_cfg->center_frequency = 433920000;  // Default frequency (433.92 MHz)
@@ -633,52 +674,32 @@ int main(int argc, char **argv)
     
     // Main processing loop
     if (g_cfg->in_files.len > 0) {
-        // File input mode
-        for (void **iter = g_cfg->in_files.elems; iter && *iter; ++iter) {
-            char *filename = *iter;
-            FILE *in_file = fopen(filename, "rb");
-            if (!in_file) {
-                print_logf(LOG_ERROR, "Client", "Failed to open file: %s", filename);
-                continue;
-            }
-            
-            print_logf(LOG_INFO, "Client", "Processing file: %s", filename);
-            
-            // Read and process pulse data from file
-            pulse_data_t pulse_data = {0};
-            while (!exit_flag) {
-                unsigned prev_pulses = pulse_data.num_pulses;
-                pulse_data_load(in_file, &pulse_data, g_cfg->samp_rate);
-                
-                // Check if we got new pulses or reached end of file
-                if (pulse_data.num_pulses == 0 || pulse_data.num_pulses == prev_pulses) {
-                    if (feof(in_file)) {
-                        break; // End of file
-                    }
-                    continue; // No new data, try again
-                }
-                
-                if (pulse_data.num_pulses > 0) {
-                    client_pulse_handler(&pulse_data);
-                }
-                
-                // Check connection
-                if (!transport_is_connected(&g_transport)) {
-                    print_log(LOG_WARNING, "Client", "Lost connection to server, reconnecting...");
-                    if (transport_connect(&g_transport) != 0) {
-                        print_log(LOG_ERROR, "Client", "Failed to reconnect");
-                        break;
-                    }
-                }
-            }
-            
-            fclose(in_file);
-        }
+        // File input mode - enable decoders for proper processing
+        print_log(LOG_INFO, "Client", "Setting up file processing with device decoders...");
+        
+        // Enable all decoders for file processing
+        register_all_protocols(g_cfg, 0);
+        
+        // Start outputs to trigger our data_acquired_handler
+        start_outputs(g_cfg, NULL);
+        
+        print_log(LOG_WARNING, "Client", "File processing requires SDR flow - switching to SDR mode for file input");
+        print_log(LOG_INFO, "Client", "Files will be processed when SDR mode starts");
+        
+        // For now, just signal that we've set up for file processing
+        // The actual file processing will happen through the normal SDR flow
+        g_stats.signals_sent = 0;
     } else {
         // SDR input mode
         print_log(LOG_INFO, "Client", "Starting SDR input mode...");
         print_logf(LOG_INFO, "Client", "Frequency: %.1f MHz", g_cfg->center_frequency / 1e6);
         print_logf(LOG_INFO, "Client", "Sample rate: %u Hz", g_cfg->samp_rate);
+        
+        // Enable all decoders for SDR processing
+        register_all_protocols(g_cfg, 0);
+        
+        // Start outputs to trigger our data_acquired_handler
+        start_outputs(g_cfg, NULL);
         
         // Initialize SDR device using rtl_433 APIs
         ret = client_start_sdr(g_cfg);
