@@ -159,6 +159,66 @@ sudo make install
 
 For detailed documentation, see [README_QUEUE_ROUTING.md](README_QUEUE_ROUTING.md).
 
+## Flex Decoders (NEW)
+
+⭐ **NEW FEATURE**: The client now supports flexible decoders like the original rtl_433, allowing you to register custom decoders for unknown signals.
+
+### Usage
+
+Add flex decoders using the `-X` option:
+
+```bash
+./rtl_433_client -T amqp://guest:guest@localhost:5672/rtl_433 \
+                 -X 'n=dfsk_variant1,m=FSK_PCM,s=52,l=52,r=1000' \
+                 -X 'n=ook_custom,m=OOK_PWM,s=100,l=200,r=2000'
+```
+
+### Flex Decoder Format
+
+`-X 'key=value[,key=value...]'`
+
+**Common keys:**
+- `n=<name>` or `name=<name>` - Device name
+- `m=<modulation>` or `modulation=<modulation>` - Modulation type
+- `s=<short>` or `short=<short>` - Short pulse width (μs)
+- `l=<long>` or `long=<long>` - Long pulse width (μs)
+- `r=<reset>` or `reset=<reset>` - Reset/gap limit (μs)
+- `g=<gap>` or `gap=<gap>` - Gap tolerance (μs)
+- `t=<tolerance>` or `tolerance=<tolerance>` - Timing tolerance (μs)
+- `y=<sync>` or `sync=<sync>` - Sync width (μs)
+
+**Modulation types:**
+- `OOK_PCM` - Pulse Code Modulation
+- `OOK_PWM` - Pulse Width Modulation
+- `OOK_PPM` - Pulse Position Modulation
+- `FSK_PCM` - FSK Pulse Code Modulation
+- `FSK_PWM` - FSK Pulse Width Modulation
+- `OOK_MC_ZEROBIT` - Manchester Code with fixed leading zero bit
+
+### Example Output
+
+When flex decoders are active, you'll see them in the logs:
+
+```
+Client: Added flex decoder: n=dfsk_variant1,m=FSK_PCM,s=52,l=52,r=1000
+Client: Registered 1 flex decoder(s)
+Client: Registered 245 device protocols for signal decoding
+
+Client: Detected FSK package #2 with 59 pulses
+Client: FSK package #2 decoded 2 device events (including 'dfsk_variant1')
+```
+
+### Getting Flex Decoder Recommendations
+
+If `pulse_analyzer` runs on unrecognized signals (debug mode), it will suggest flex decoder parameters:
+
+```
+Guessing modulation: Pulse Position Modulation with fixed pulse width
+Use a flex decoder with -X 'n=name,m=OOK_PPM,s=136,l=248,g=252,r=252'
+```
+
+You can then add this recommendation as a new flex decoder in your next run.
+
 ## Data Format
 
 The client sends two types of data to the server:

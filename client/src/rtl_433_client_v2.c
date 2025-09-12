@@ -13,6 +13,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <signal.h>
+#include <sys/time.h>
 #include <unistd.h>
 #include <time.h>
 
@@ -31,6 +32,11 @@
 #include "compat_time.h"
 #include "client_transport.h"
 
+// Flex decoder storage
+#define MAX_FLEX_DECODERS 32
+static char *flex_specs[MAX_FLEX_DECODERS] = {0};
+static int flex_count = 0;
+
 // Global variables
 static r_cfg_t *g_cfg = NULL;
 static transport_connection_t g_transport;
@@ -45,9 +51,99 @@ typedef struct {
 
 static client_stats_t g_stats = {0};
 
+// Global package counter for linking raw and decoded data
+static unsigned long g_current_package_id = 0;
+
+// For unique package IDs across restarts
+static uint64_t g_start_time_us = 0;
+static uint32_t g_sequence_in_second = 0;
+static uint32_t g_last_second = 0;
+
 /// Forward declarations
 static void client_pulse_handler(pulse_data_t *pulse_data);
-static void client_pulse_handler_with_type(pulse_data_t *pulse_data, int modulation_type);
+static void client_pulse_handler_with_type(pulse_data_t *pulse_data, int modulation_type, unsigned long package_id);
+
+// Generate unique package ID across restarts
+static unsigned long generate_unique_package_id(void)
+{
+    struct timeval tv;
+    gettimeofday(&tv, NULL);
+    
+    uint32_t current_second = (uint32_t)tv.tv_sec;
+    
+    // Initialize on first call
+    if (g_start_time_us == 0) {
+        g_start_time_us = (uint64_t)tv.tv_sec * 1000000ULL + tv.tv_usec;
+        g_last_second = current_second;
+        g_sequence_in_second = 0;
+    }
+    
+    // Reset sequence if we moved to next second
+    if (current_second != g_last_second) {
+        g_last_second = current_second;
+        g_sequence_in_second = 0;
+    }
+    
+    g_sequence_in_second++;
+    
+    // Create unique ID: timestamp(32-bit) + sequence(16-bit) + random_start(16-bit)
+    // This fits in unsigned long (64-bit) and is unique across restarts
+    uint64_t unique_id = ((uint64_t)current_second << 32) | 
+                        ((g_sequence_in_second & 0xFFFF) << 16) | 
+                        ((g_start_time_us & 0xFFFF));
+    
+    return (unsigned long)unique_id;
+}
+
+// Custom log handler for client (bypasses data_t output system)
+static void client_log_handler(log_level_t level, char const *src, char const *msg, void *userdata)
+{
+    r_cfg_t *cfg = (r_cfg_t *)userdata;
+    
+    // Check verbosity level
+    if (cfg && cfg->verbosity < (int)level) {
+        return;
+    }
+    
+    // Simple direct output to stderr (like default logger)
+    fprintf(stderr, "%s: %s\n", src, msg);
+}
+
+/// External flex decoder function (from rtl_433)
+extern r_device *flex_create_device(char *spec);
+
+/// Register all stored flex decoders
+static void register_flex_decoders(r_cfg_t *cfg)
+{
+    int registered = 0;
+    for (int i = 0; i < flex_count; i++) {
+        if (flex_specs[i]) {
+            r_device *flex_device = flex_create_device(flex_specs[i]);
+            if (flex_device) {
+                register_protocol(cfg, flex_device, "");
+                registered++;
+                print_logf(LOG_INFO, "Client", "Registered flex decoder #%d: %s", i + 1, flex_specs[i]);
+            } else {
+                print_logf(LOG_ERROR, "Client", "Failed to create flex decoder from spec: %s", flex_specs[i]);
+            }
+        }
+    }
+    if (registered > 0) {
+        print_logf(LOG_INFO, "Client", "Registered %d flex decoder(s)", registered);
+    }
+}
+
+/// Clean up flex decoder specifications
+static void cleanup_flex_decoders(void)
+{
+    for (int i = 0; i < flex_count; i++) {
+        if (flex_specs[i]) {
+            free(flex_specs[i]);
+            flex_specs[i] = NULL;
+        }
+    }
+    flex_count = 0;
+}
 
 /// Process CU8 file with proper IQ -> AM -> pulse pipeline
 static int process_cu8_file(const char *filename)
@@ -100,9 +196,9 @@ static int process_cu8_file(const char *filename)
         
         // Removed: excessive logging of sample count
         
-        // Debug: Print first few AM samples
-        if (packages_found < 2) {
-            print_logf(LOG_DEBUG, "Client", "AM samples: %d %d %d %d %d %d %d %d", 
+        // Debug: Print first few AM samples only at trace level
+        if (packages_found < 2 && g_cfg->verbosity >= LOG_TRACE) {
+            print_logf(LOG_TRACE, "Client", "AM samples: %d %d %d %d %d %d %d %d", 
                       am_buf[0], am_buf[1], am_buf[2], am_buf[3], 
                       am_buf[4], am_buf[5], am_buf[6], am_buf[7]);
         }
@@ -132,11 +228,12 @@ static int process_cu8_file(const char *filename)
                 // Step 3: Calculate signal metrics
                 calc_rssi_snr(g_cfg, &pulse_data);
                 
-                print_logf(LOG_INFO, "Client", "Detected OOK package #%u with %u pulses", 
+                print_logf(LOG_DEBUG, "Client", "Detected OOK package #%u with %u pulses", 
                           packages_found, pulse_data.num_pulses);
                           
                 // Step 4a: Always send pulse_data first (raw demodulated data)
-                client_pulse_handler_with_type(&pulse_data, PULSE_DATA_OOK);
+                g_current_package_id = generate_unique_package_id();
+                client_pulse_handler_with_type(&pulse_data, PULSE_DATA_OOK, g_current_package_id);
                 
                 // Step 4b: Try to decode devices (this will call client_data_acquired_handler if successful)
                 int ook_events = run_ook_demods(&g_cfg->demod->r_devs, &pulse_data);
@@ -157,11 +254,12 @@ static int process_cu8_file(const char *filename)
                 packages_found++;
                 calc_rssi_snr(g_cfg, &fsk_pulse_data);
                 
-                print_logf(LOG_INFO, "Client", "Detected FSK package #%u with %u pulses", 
+                print_logf(LOG_DEBUG, "Client", "Detected FSK package #%u with %u pulses",
                           packages_found, fsk_pulse_data.num_pulses);
                           
                 // Step 4a: Always send pulse_data first (raw demodulated data)
-                client_pulse_handler_with_type(&fsk_pulse_data, PULSE_DATA_FSK);
+                g_current_package_id = generate_unique_package_id();
+                client_pulse_handler_with_type(&fsk_pulse_data, PULSE_DATA_FSK, g_current_package_id);
                 
                 // Step 4b: Try to decode devices (this will call client_data_acquired_handler if successful)
                 int fsk_events = run_fsk_demods(&g_cfg->demod->r_devs, &fsk_pulse_data);
@@ -203,13 +301,14 @@ void client_data_acquired_handler(r_device *r_dev, data_t *data)
             demod_data.frequency = g_cfg->center_frequency;
             demod_data.sample_rate = g_cfg->samp_rate;
             demod_data.raw_data_hex = json_str;
+            demod_data.package_id = g_current_package_id;
             
             // Send via transport to detected queue
             int result = transport_send_demod_data_to_queue(&g_transport, &demod_data, "detected");
             
             if (result == 0) {
                 g_stats.signals_sent++;
-                print_logf(LOG_INFO, "Client", "Sent device data: %s to queue: detected", r_dev ? r_dev->name : "unknown");
+                print_logf(LOG_DEBUG, "Client", "Sent device data: %s to queue: detected", r_dev ? r_dev->name : "unknown");
             } else {
                 g_stats.send_errors++;
                 print_logf(LOG_WARNING, "Client", "Failed to send device data: %s to queue: detected", r_dev ? r_dev->name : "unknown");
@@ -253,7 +352,7 @@ static void print_statistics(void)
 // Removed unused client_event_handler
 
 /// Custom pulse handler - sends raw pulse data to server with appropriate queue routing
-static void client_pulse_handler_with_type(pulse_data_t *pulse_data, int modulation_type)
+static void client_pulse_handler_with_type(pulse_data_t *pulse_data, int modulation_type, unsigned long package_id)
 {
     if (!pulse_data || !pulse_data->num_pulses) {
         return;
@@ -273,10 +372,10 @@ static void client_pulse_handler_with_type(pulse_data_t *pulse_data, int modulat
         type_name = "Unknown";
     }
     
-    // Send pulse data to appropriate queue
-    if (transport_send_pulse_data_to_queue(&g_transport, pulse_data, queue_name) == 0) {
+    // Send pulse data to appropriate queue with package_id
+    if (transport_send_pulse_data_with_id(&g_transport, pulse_data, queue_name, package_id) == 0) {
         g_stats.signals_sent++;
-        print_logf(LOG_INFO, "Client", "Sent %s signal: %u pulses to queue: %s", 
+        print_logf(LOG_DEBUG, "Client", "Sent %s signal: %u pulses to queue: %s", 
                   type_name, pulse_data->num_pulses, queue_name);
     } else {
         g_stats.send_errors++;
@@ -288,7 +387,8 @@ static void client_pulse_handler_with_type(pulse_data_t *pulse_data, int modulat
 static void client_pulse_handler(pulse_data_t *pulse_data)
 {
     // Default to unknown type for legacy calls
-    client_pulse_handler_with_type(pulse_data, 0);
+    g_current_package_id = generate_unique_package_id();
+    client_pulse_handler_with_type(pulse_data, 0, g_current_package_id);
 }
 
 /// SDR event callback function - processes received samples  
@@ -300,9 +400,9 @@ static void client_sdr_callback(sdr_event_t *ev, void *ctx)
     r_cfg_t *cfg = ctx;
     struct dm_state *demod = cfg->demod;
     
-    // Debug: Always log callback invocation with high verbosity
-    if (g_cfg->verbosity >= LOG_DEBUG || callback_count % 100 == 1) {
-        print_logf(LOG_INFO, "SDR", "Callback #%lu: ev=0x%x, demod=%p, exit=%d", 
+    // Only log callback at maximum verbosity and extremely rarely
+    if (g_cfg->verbosity >= LOG_TRACE && (callback_count % 50000 == 1)) {
+        print_logf(LOG_TRACE, "SDR", "Callback #%lu: ev=0x%x, demod=%p, exit=%d", 
                   callback_count, ev->ev, (void*)demod, exit_flag);
     }
     
@@ -334,8 +434,12 @@ static void client_sdr_callback(sdr_event_t *ev, void *ctx)
         static unsigned long data_callbacks = 0;
         data_callbacks++;
         
-        if (data_callbacks <= 5 || g_cfg->verbosity >= LOG_DEBUG) {
-            print_logf(LOG_INFO, "SDR", "Data callback #%lu: %lu samples (%lu total), buf=%p", 
+        // Show progress very rarely - every 100000 callbacks (about 6-7 minutes)
+        if (data_callbacks == 1 || (data_callbacks % 100000 == 0)) {
+            print_logf(LOG_INFO, "SDR", "Processed %lu callbacks, %lu total samples (%.1f MB)", 
+                      data_callbacks, total_samples, total_samples * 2.0 / 1024.0 / 1024.0);
+        } else if (g_cfg->verbosity >= LOG_TRACE && (data_callbacks % 5000 == 0)) {
+            print_logf(LOG_TRACE, "SDR", "Data callback #%lu: %lu samples (%lu total), buf=%p", 
                       data_callbacks, n_samples, total_samples, (void*)iq_buf);
         }
         
@@ -377,10 +481,11 @@ static void client_sdr_callback(sdr_event_t *ev, void *ctx)
             }
         }
         
-        if (data_callbacks <= 3) {
-            print_logf(LOG_INFO, "SDR", "AM demodulation: avg_db=%.1f, first values: %d %d %d %d %d", 
+        // Only show demodulation info with maximum verbosity
+        if (g_cfg->verbosity >= LOG_TRACE && data_callbacks == 1) {
+            print_logf(LOG_TRACE, "SDR", "AM demodulation: avg_db=%.1f, first values: %d %d %d %d %d", 
                       avg_db, am_buf[0], am_buf[1], am_buf[2], am_buf[3], am_buf[4]);
-            print_logf(LOG_INFO, "SDR", "FM demodulation: first values: %d %d %d %d %d", 
+            print_logf(LOG_TRACE, "SDR", "FM demodulation: first values: %d %d %d %d %d", 
                       fm_buf[0], fm_buf[1], fm_buf[2], fm_buf[3], fm_buf[4]);
         }
         
@@ -402,41 +507,42 @@ static void client_sdr_callback(sdr_event_t *ev, void *ctx)
             package_type = pulse_detect_package(demod->pulse_detect, am_buf, fm_buf, n_samples, 
                                                cfg->samp_rate, 0, &pulse_data, &fsk_pulse_data, fpdm);
             
-            if (data_callbacks <= 3) {
-                print_logf(LOG_DEBUG, "SDR", "Pulse detection: type=%d, OOK_pulses=%u, FSK_pulses=%u", 
+            // Only log pulse detection at maximum verbosity
+            if (g_cfg->verbosity >= LOG_TRACE) {
+                print_logf(LOG_TRACE, "SDR", "Pulse detection: type=%d, OOK_pulses=%u, FSK_pulses=%u", 
                           package_type, pulse_data.num_pulses, fsk_pulse_data.num_pulses);
             }
                                                
-            // Step 3: Process detected packages - decode devices only, no raw pulse_data
+            // Step 3: Process detected packages - send raw pulse data and decode devices
             if (package_type == PULSE_DATA_OOK && pulse_data.num_pulses > 0) {
                 calc_rssi_snr(cfg, &pulse_data);
                 
-                print_logf(LOG_INFO, "SDR", "Detected OOK package with %u pulses (avg_db=%.1f)", 
-                          pulse_data.num_pulses, avg_db);
+                // Send raw pulse data to transport (with modulation type for routing)
+                g_current_package_id = generate_unique_package_id();
+                client_pulse_handler_with_type(&pulse_data, PULSE_DATA_OOK, g_current_package_id);
                           
                 // Try to decode devices (this will call client_data_acquired_handler if successful)
                 int ook_events = run_ook_demods(&cfg->demod->r_devs, &pulse_data);
                 
                 if (ook_events > 0) {
-                    print_logf(LOG_INFO, "SDR", "OOK package decoded %d device events", ook_events);
-                } else {
-                    print_logf(LOG_DEBUG, "SDR", "OOK package: no devices decoded");
+                    print_logf(LOG_INFO, "SDR", "OOK: %u pulses, decoded %d device events (avg_db=%.1f)", 
+                              pulse_data.num_pulses, ook_events, avg_db);
                 }
             }
             
             if (package_type == PULSE_DATA_FSK && fsk_pulse_data.num_pulses > 0) {
                 calc_rssi_snr(cfg, &fsk_pulse_data);
                 
-                print_logf(LOG_INFO, "SDR", "Detected FSK package with %u pulses (avg_db=%.1f)", 
-                          fsk_pulse_data.num_pulses, avg_db);
+                // Send raw pulse data to transport (with modulation type for routing)
+                g_current_package_id = generate_unique_package_id();
+                client_pulse_handler_with_type(&fsk_pulse_data, PULSE_DATA_FSK, g_current_package_id);
                           
                 // Try to decode devices (this will call client_data_acquired_handler if successful)
                 int fsk_events = run_fsk_demods(&cfg->demod->r_devs, &fsk_pulse_data);
                 
                 if (fsk_events > 0) {
-                    print_logf(LOG_INFO, "SDR", "FSK package decoded %d device events", fsk_events);
-                } else {
-                    print_logf(LOG_DEBUG, "SDR", "FSK package: no devices decoded");
+                    print_logf(LOG_INFO, "SDR", "FSK: %u pulses, decoded %d device events (avg_db=%.1f)", 
+                              fsk_pulse_data.num_pulses, fsk_events, avg_db);
                 }
             }
             
@@ -526,22 +632,37 @@ static void client_stop_sdr(r_cfg_t *cfg)
 /// Print help
 static void print_help(const char *program_name)
 {
-    printf("Usage: %s [rtl_433 options] -T <server_url>\n", program_name);
+    printf("Usage: %s [rtl_433 options] -T <server_url> [-X <flex_spec>]\n", program_name);
     printf("\nRTL_433 Client - Signal demodulation and server transmission\n");
     printf("\nClient-specific options:\n");
     printf("  -T <url>                Server URL (http://host:port/path)\n");
+    printf("  -X <flex_spec>          Add flex decoder (can be used multiple times)\n");
     printf("  --transport-help        Show transport options\n");
+    printf("\nVerbosity levels:\n");
+    printf("  (none)                  Normal operation (LOG_INFO)\n");
+    printf("  -v                      Verbose (LOG_DEBUG)\n");
+    printf("  -vv                     Very verbose (LOG_TRACE) - use carefully\n");
+    printf("  -vvv                    Maximum verbosity - may flood output!\n");
     printf("\nAll standard rtl_433 options are supported:\n");
     printf("  -r <file>               Read from file instead of RTL-SDR\n");
     printf("  -d <device>             RTL-SDR device (default: 0)\n");
     printf("  -f <freq>               Frequency in Hz (default: 433920000)\n");
     printf("  -s <rate>               Sample rate (default: 250000)\n");
     printf("  -g <gain>               Gain (default: auto)\n");
-    printf("  -v                      Increase verbosity\n");
+    printf("  -v, -vv, -vvv           Increase verbosity (minimal SDR mode)\n");
     printf("  -h                      Show rtl_433 help\n");
+    printf("\nFlex decoder format:\n");
+    printf("  'key=value[,key=value...]' where keys include:\n");
+    printf("  n=<name>      Device name\n");
+    printf("  m=<modulation> OOK_PCM, OOK_PWM, FSK_PCM, FSK_PWM, etc.\n");
+    printf("  s=<short>     Short pulse width (μs)\n");
+    printf("  l=<long>      Long pulse width (μs)\n");
+    printf("  r=<reset>     Reset/gap limit (μs)\n");
     printf("\nExamples:\n");
     printf("  %s -r signal.cu8 -T http://localhost:8080/api/signals\n", program_name);
     printf("  %s -d 0 -f 433.92M -T http://server:8080\n", program_name);
+    printf("  %s -f 433.92M -T amqp://guest:guest@localhost:5672/rtl_433 \\\n", program_name);
+    printf("         -X 'n=dfsk_variant1,m=FSK_PCM,s=52,l=52,r=1000'\n");
     printf("\nFor more information, see README_SPLIT.md\n");
 }
 
@@ -556,7 +677,29 @@ static int parse_client_args(int argc, char **argv, transport_config_t *transpor
     transport_cfg->topic_queue = strdup("/api/signals");
     
     for (int i = 1; i < argc; i++) {
-        if (strcmp(argv[i], "-T") == 0 && i + 1 < argc) {
+        if (strcmp(argv[i], "-X") == 0 && i + 1 < argc) {
+            // Store flex decoder spec for later registration
+            if (flex_count < MAX_FLEX_DECODERS) {
+                flex_specs[flex_count] = strdup(argv[i + 1]);
+                if (!flex_specs[flex_count]) {
+                    fprintf(stderr, "Error: Failed to allocate memory for flex decoder spec\n");
+                    exit(1);
+                }
+                flex_count++;
+                print_logf(LOG_INFO, "Client", "Added flex decoder: %s", argv[i + 1]);
+            } else {
+                fprintf(stderr, "Error: Maximum number of flex decoders (%d) exceeded\n", MAX_FLEX_DECODERS);
+                exit(1);
+            }
+            
+            // Remove -X and spec from argv for rtl_433 parsing
+            for (int j = i; j < argc - 2; j++) {
+                argv[j] = argv[j + 2];
+            }
+            argc -= 2;
+            i--; // Adjust index after removal
+        }
+        else if (strcmp(argv[i], "-T") == 0 && i + 1 < argc) {
             // Parse server URL
             char *url = argv[i + 1];
             free(transport_cfg->host);
@@ -780,18 +923,21 @@ int main(int argc, char **argv)
     
     r_init_cfg(g_cfg);
     
+    // Set up custom logging handler for client
+    r_logger_set_log_handler(client_log_handler, g_cfg);
+    
     // Add null output to suppress normal rtl_433 output
     add_null_output(g_cfg, NULL);
     
     // Debug: Print pulse detector configuration
     if (g_cfg->demod && g_cfg->demod->pulse_detect) {
-        print_log(LOG_DEBUG, "Client", "Pulse detector initialized successfully");
+        print_log(LOG_INFO, "Client", "Pulse detector initialized successfully");
     } else {
         print_log(LOG_WARNING, "Client", "Pulse detector not properly initialized!");
     }
     
     // Set client-specific configuration
-    g_cfg->verbosity = LOG_DEBUG;  // Default verbosity (increased for debugging)
+    g_cfg->verbosity = LOG_INFO;   // Default verbosity (reduced for normal operation)
     g_cfg->center_frequency = 433920000;  // Default frequency (433.92 MHz)
     g_cfg->dev_query = strdup("0");  // Default device
     g_cfg->gain_str = strdup("auto");  // Default gain
@@ -800,13 +946,13 @@ int main(int argc, char **argv)
     // Configure demodulation (enable both AM and FM for full signal detection)
     if (g_cfg->demod) {
         g_cfg->demod->enable_FM_demod = 1;  // Enable FM for FSK detection
-        print_log(LOG_DEBUG, "Client", "FM demodulation enabled for FSK signals (AM+FM dual processing)");
+        print_log(LOG_INFO, "Client", "FM demodulation enabled for FSK signals (AM+FM dual processing)");
         
         // Set pulse detector levels (critical for detection!)
         pulse_detect_set_levels(g_cfg->demod->pulse_detect, g_cfg->demod->use_mag_est, 
                               g_cfg->demod->level_limit, g_cfg->demod->min_level, 
                               g_cfg->demod->min_snr, g_cfg->demod->detect_verbosity);
-        print_logf(LOG_DEBUG, "Client", "Pulse detector levels set: level_limit=%.1f, min_level=%.1f, min_snr=%.1f", 
+        print_logf(LOG_INFO, "Client", "Pulse detector levels set: level_limit=%.1f, min_level=%.1f, min_snr=%.1f", 
                   g_cfg->demod->level_limit, g_cfg->demod->min_level, g_cfg->demod->min_snr);
     }
     
@@ -886,6 +1032,8 @@ int main(int argc, char **argv)
         int saved_verbosity = g_cfg->verbosity;
         g_cfg->verbosity = LOG_WARNING; // Suppress protocol registration logs
         register_all_protocols(g_cfg, 0);
+        // Register flex decoders after standard protocols
+        register_flex_decoders(g_cfg);
         g_cfg->verbosity = saved_verbosity; // Restore original verbosity
         
         // Override all device output handlers to use our custom client handler
@@ -918,6 +1066,8 @@ int main(int argc, char **argv)
         int saved_verbosity = g_cfg->verbosity;
         g_cfg->verbosity = LOG_WARNING; // Suppress protocol registration logs
         register_all_protocols(g_cfg, 0);
+        // Register flex decoders after standard protocols
+        register_flex_decoders(g_cfg);
         g_cfg->verbosity = saved_verbosity; // Restore original verbosity
         
         print_logf(LOG_INFO, "Client", "Registered %zu device protocols for signal decoding", g_cfg->demod->r_devs.len);
@@ -974,6 +1124,9 @@ cleanup:
     if (g_cfg) {
         r_free_cfg(g_cfg);
     }
+    
+    // Cleanup flex decoders
+    cleanup_flex_decoders();
     
     print_logf(LOG_INFO, "Client", "rtl_433_client finished with code %d", ret);
     return ret;

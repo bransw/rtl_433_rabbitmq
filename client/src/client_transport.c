@@ -1,5 +1,5 @@
 /** @file
-    Реализация транспортного слоя для rtl_433_client.
+    Transport layer implementation for rtl_433_client.
     
     Copyright (C) 2024
     
@@ -46,13 +46,13 @@ typedef struct rabbitmq_data rabbitmq_data_t;
 #ifdef ENABLE_RABBITMQ
 #endif
 
-/// Структура для HTTP ответа
+/// Structure for HTTP response
 struct http_response {
     char *data;
     size_t size;
 };
 
-/// Callback для получения HTTP ответа
+/// Callback for receiving HTTP response
 static size_t http_write_callback(void *contents, size_t size, size_t nmemb, struct http_response *response)
 {
     size_t realsize = size * nmemb;
@@ -71,7 +71,7 @@ static size_t http_write_callback(void *contents, size_t size, size_t nmemb, str
     return realsize;
 }
 
-/// Инициализировать транспортное соединение
+/// Initialize transport connection
 int transport_init(transport_connection_t *conn, transport_config_t *config)
 {
     if (!conn || !config) {
@@ -106,7 +106,7 @@ int transport_init(transport_connection_t *conn, transport_config_t *config)
     }
 }
 
-/// Подключиться к серверу
+/// Connect to server
 int transport_connect(transport_connection_t *conn)
 {
     if (!conn || !conn->config) {
@@ -115,7 +115,7 @@ int transport_connect(transport_connection_t *conn)
     
     switch (conn->config->type) {
         case TRANSPORT_HTTP:
-            // HTTP не требует постоянного соединения
+            // HTTP doesn't require persistent connection
             conn->connected = 1;
             return 0;
             
@@ -284,20 +284,89 @@ int transport_send_pulse_data_to_queue(transport_connection_t *conn, const pulse
     free(json_str);
     
     if (result == 0) {
-        print_logf(LOG_DEBUG, "Transport", "Message sent to queue: %s", queue_name);
+        print_logf(LOG_TRACE, "Transport", "Message sent to queue: %s", queue_name);
     }
     
     return result;
 }
 
-/// Отправить демодулированные данные
+int transport_send_pulse_data_with_id(transport_connection_t *conn, const pulse_data_t *pulse_data, const char *queue_name, unsigned long package_id)
+{
+    if (!conn || !pulse_data || !pulse_data->num_pulses || !queue_name) {
+        return -1;
+    }
+    
+    // Convert pulse_data to data_t and then to JSON
+    data_t *data = pulse_data_print_data(pulse_data);
+    if (!data) {
+        print_log(LOG_ERROR, "Transport", "Failed to convert pulse data");
+        return -1;
+    }
+    
+    // Add package_id to the data
+    data_t *package_id_data = data_make("package_id", "", DATA_INT, package_id, NULL);
+    data = data_prepend(data, package_id_data);
+    
+    // Create JSON string from data_t
+    char json_buffer[8192];
+    size_t json_len = data_print_jsons(data, json_buffer, sizeof(json_buffer));
+    if (json_len == 0) {
+        print_log(LOG_ERROR, "Transport", "Failed to serialize pulse data to JSON");
+        data_free(data);
+        return -1;
+    }
+    
+    char *json_str = strdup(json_buffer);
+    data_free(data);
+    
+    if (!json_str) {
+        print_log(LOG_ERROR, "Transport", "Failed to allocate memory for JSON");
+        return -1;
+    }
+    
+    int result = 0;
+    
+    switch (conn->config->type) {
+        case TRANSPORT_HTTP:
+            result = transport_http_send(conn, json_str);
+            break;
+        case TRANSPORT_MQTT:
+            char *original_topic = conn->config->topic_queue;
+            conn->config->topic_queue = (char *)queue_name;
+            result = transport_mqtt_send(conn, json_str);
+            conn->config->topic_queue = original_topic;
+            break;
+        case TRANSPORT_RABBITMQ:
+            rabbitmq_data_t *rmq = (rabbitmq_data_t *)conn->connection_data;
+            char *original_routing_key = rmq->routing_key;
+            rmq->routing_key = strdup(queue_name);
+            result = transport_rabbitmq_send(conn, json_str);
+            free(rmq->routing_key);
+            rmq->routing_key = original_routing_key;
+            break;
+        default:
+            print_logf(LOG_ERROR, "Transport", "Unsupported transport type: %d", conn->config->type);
+            result = -1;
+            break;
+    }
+    
+    free(json_str);
+    
+    if (result == 0) {
+        print_logf(LOG_TRACE, "Transport", "Message sent to queue: %s", queue_name);
+    }
+    
+    return result;
+}
+
+/// Send demodulated data
 int transport_send_demod_data(transport_connection_t *conn, const demod_data_t *data)
 {
     if (!conn || !data || !conn->connected) {
         return -1;
     }
     
-    // Сериализуем данные в JSON
+    // Serialize data to JSON
     char *json_data = demod_data_to_json(data);
     if (!json_data) {
         print_log(LOG_ERROR, "Transport", "Failed to serialize data");
@@ -342,7 +411,7 @@ int transport_send_demod_data_to_queue(transport_connection_t *conn, const demod
         return -1;
     }
     
-    // Сериализуем данные в JSON
+    // Serialize data to JSON
     char *json_data = demod_data_to_json(data);
     if (!json_data) {
         print_log(LOG_ERROR, "Transport", "Failed to serialize data");
@@ -382,20 +451,20 @@ int transport_send_demod_data_to_queue(transport_connection_t *conn, const demod
     free(json_data);
     
     if (result == 0) {
-        print_logf(LOG_DEBUG, "Transport", "Device data sent to queue: %s", queue_name);
+        print_logf(LOG_TRACE, "Transport", "Device data sent to queue: %s", queue_name);
     }
     
     return result;
 }
 
-/// Отправить батч демодулированных данных
+/// Send batch of demodulated data
 int transport_send_demod_batch(transport_connection_t *conn, const demod_data_t *data_array, int count)
 {
     if (!conn || !data_array || count <= 0 || !conn->connected) {
         return -1;
     }
     
-    // Сериализуем батч в JSON
+    // Serialize batch to JSON
     char *json_data = demod_data_batch_to_json(data_array, count);
     if (!json_data) {
         print_log(LOG_ERROR, "Transport", "Failed to serialize batch data");
@@ -431,13 +500,13 @@ int transport_send_demod_batch(transport_connection_t *conn, const demod_data_t 
     return result;
 }
 
-/// Проверить состояние соединения
+/// Check connection status
 int transport_is_connected(const transport_connection_t *conn)
 {
     return conn ? conn->connected : 0;
 }
 
-/// Отключиться от сервера
+/// Disconnect from server
 void transport_disconnect(transport_connection_t *conn)
 {
     if (!conn) {
@@ -448,7 +517,7 @@ void transport_disconnect(transport_connection_t *conn)
     
     switch (conn->config->type) {
         case TRANSPORT_HTTP:
-            // HTTP не требует отключения
+            // HTTP doesn't require disconnection
             break;
             
 #ifdef ENABLE_MQTT
@@ -470,7 +539,7 @@ void transport_disconnect(transport_connection_t *conn)
     }
 }
 
-/// Освободить ресурсы транспорта
+/// Free transport resources
 void transport_cleanup(transport_connection_t *conn)
 {
     if (!conn) {
@@ -503,7 +572,7 @@ void transport_cleanup(transport_connection_t *conn)
     }
 }
 
-/// HTTP специфичные функции
+/// HTTP specific functions
 int transport_http_init(transport_connection_t *conn)
 {
     curl_global_init(CURL_GLOBAL_DEFAULT);
@@ -527,7 +596,7 @@ int transport_http_send(transport_connection_t *conn, const char *json_data)
     CURL *curl = (CURL *)conn->connection_data;
     struct http_response response = {0};
     
-    // Формируем URL
+    // Form URL
     char url[1024];
     snprintf(url, sizeof(url), "%s://%s:%d%s", 
              conn->config->ssl_enabled ? "https" : "http",
@@ -535,14 +604,14 @@ int transport_http_send(transport_connection_t *conn, const char *json_data)
              conn->config->port,
              conn->config->topic_queue ? conn->config->topic_queue : "/api/signals");
     
-    // Настраиваем CURL
+    // Configure CURL
     curl_easy_setopt(curl, CURLOPT_URL, url);
     curl_easy_setopt(curl, CURLOPT_POSTFIELDS, json_data);
     curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, http_write_callback);
     curl_easy_setopt(curl, CURLOPT_WRITEDATA, &response);
     curl_easy_setopt(curl, CURLOPT_TIMEOUT, 10L);
     
-    // Устанавливаем заголовки
+    // Set headers
     struct curl_slist *headers = NULL;
     headers = curl_slist_append(headers, "Content-Type: application/json");
     
@@ -553,7 +622,7 @@ int transport_http_send(transport_connection_t *conn, const char *json_data)
     
     curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);
     
-    // Выполняем запрос
+    // Execute request
     CURLcode res = curl_easy_perform(curl);
     
     long response_code = 0;
@@ -587,7 +656,7 @@ void transport_http_cleanup(transport_connection_t *conn)
     curl_global_cleanup();
 }
 
-/// Функции для работы с demod_data
+/// Functions for working with demod_data
 demod_data_t *demod_data_create(void)
 {
     demod_data_t *data = calloc(1, sizeof(demod_data_t));
@@ -609,7 +678,7 @@ void demod_data_free(demod_data_t *data)
     free(data->raw_data_hex);
     
     if (data->bitbuffer) {
-        // TODO: освободить bitbuffer
+        // TODO: free bitbuffer
         free(data->bitbuffer);
     }
     
@@ -631,7 +700,7 @@ void demod_data_set_bitbuffer(demod_data_t *data, const bitbuffer_t *bitbuffer)
         return;
     }
     
-    // TODO: реализовать копирование bitbuffer
+    // TODO: implement bitbuffer copying
     data->bitbuffer = malloc(sizeof(bitbuffer_t));
     if (data->bitbuffer) {
         memcpy(data->bitbuffer, bitbuffer, sizeof(bitbuffer_t));
@@ -644,7 +713,7 @@ char *demod_data_to_json(const demod_data_t *data)
         return NULL;
     }
     
-    // Простая JSON сериализация (в реальной реализации лучше использовать библиотеку)
+    // Simple JSON serialization (in real implementation better to use a library)
     char *json = malloc(4096);
     if (!json) {
         return NULL;
@@ -662,6 +731,7 @@ char *demod_data_to_json(const demod_data_t *data)
         "  \"ook_detected\": %d,\n"
         "  \"fsk_detected\": %d,\n"
         "  \"pulse_count\": %u,\n"
+        "  \"package_id\": %lu,\n"
         "  \"raw_data_hex\": \"%s\"\n"
         "}",
         data->device_id ? data->device_id : "unknown",
@@ -674,6 +744,7 @@ char *demod_data_to_json(const demod_data_t *data)
         data->ook_detected,
         data->fsk_detected,
         data->pulse_data.num_pulses,
+        data->package_id,
         data->raw_data_hex ? data->raw_data_hex : ""
     );
     
@@ -686,7 +757,7 @@ char *demod_data_batch_to_json(const demod_data_t *data_array, int count)
         return NULL;
     }
     
-    // Простая JSON сериализация батча
+    // Simple batch JSON serialization
     char *json = malloc(count * 4096 + 1024);
     if (!json) {
         return NULL;
@@ -712,8 +783,8 @@ char *demod_data_batch_to_json(const demod_data_t *data_array, int count)
     return json;
 }
 
-// Заглушки для других транспортов (MQTT, RabbitMQ, TCP/UDP)
-// В реальной реализации здесь должен быть полный код
+// Stubs for other transports (MQTT, RabbitMQ, TCP/UDP)
+// In real implementation there should be complete code here
 
 #ifdef ENABLE_MQTT
 int transport_mqtt_init(transport_connection_t *conn)
@@ -815,7 +886,7 @@ int transport_mqtt_send(transport_connection_t *conn, const char *json_data)
         print_logf(LOG_WARNING, "Transport", "MQTT message delivery timeout: %d", rc);
     }
     
-    print_logf(LOG_DEBUG, "Transport", "MQTT message sent to topic: %s", topic);
+    print_logf(LOG_TRACE, "Transport", "MQTT message sent to topic: %s", topic);
     return 0;
 }
 
@@ -986,7 +1057,7 @@ int transport_rabbitmq_send(transport_connection_t *conn, const char *json_data)
         return -1;
     }
     
-    print_logf(LOG_DEBUG, "Transport", "RabbitMQ message sent to exchange: %s, routing_key: %s", 
+    print_logf(LOG_TRACE, "Transport", "RabbitMQ message sent to exchange: %s, routing_key: %s",
                rmq->exchange, rmq->routing_key);
     return 0;
 }
@@ -1025,7 +1096,7 @@ void transport_rabbitmq_cleanup(transport_connection_t *conn)
 
 int transport_socket_init(transport_connection_t *conn)
 {
-    // TODO: реализовать TCP/UDP сокеты
+    // TODO: implement TCP/UDP sockets
     print_log(LOG_WARNING, "Transport", "Socket transport not implemented");
     return -1;
 }
@@ -1042,7 +1113,7 @@ int transport_socket_send(transport_connection_t *conn, const char *json_data)
 
 void transport_socket_cleanup(transport_connection_t *conn)
 {
-    // TODO: реализовать очистку сокетов
+    // TODO: implement socket cleanup
 }
 
 

@@ -64,7 +64,7 @@ show_help() {
     echo "  $0 --no-server -j 8     Client only, 8 threads"
 }
 
-# Парсинг аргументов командной строки
+# Command line argument parsing
 while [[ $# -gt 0 ]]; do
     case $1 in
         -h|--help)
@@ -120,18 +120,18 @@ while [[ $# -gt 0 ]]; do
             shift
             ;;
         *)
-            print_error "Неизвестный параметр: $1"
+            print_error "Unknown parameter: $1"
             show_help
             exit 1
             ;;
     esac
 done
 
-# Проверка зависимостей
+# Dependency checking
 check_dependencies() {
-    print_info "Проверка зависимостей..."
+    print_info "Checking dependencies..."
     
-    # Обязательные зависимости
+    # Required dependencies
     local deps=("cmake" "make" "gcc" "pkg-config")
     
     if [[ "$BUILD_CLIENT" == "ON" ]]; then
@@ -140,7 +140,7 @@ check_dependencies() {
     
     for dep in "${deps[@]}"; do
         if ! command -v "$dep" &> /dev/null; then
-            print_error "Зависимость не найдена: $dep"
+            print_error "Dependency not found: $dep"
             exit 1
         fi
     done
@@ -176,7 +176,7 @@ check_dependencies() {
         fi
     fi
     
-    print_success "Все зависимости найдены"
+    print_success "All dependencies found"
 }
 
 # Очистка директории сборки
@@ -314,7 +314,7 @@ main() {
         create_package
     fi
     
-    print_success "Сборка завершена успешно!"
+    print_success "Build completed successfully!"
     
     # Вывод информации о созданных файлах
     print_info "Созданные исполняемые файлы:"

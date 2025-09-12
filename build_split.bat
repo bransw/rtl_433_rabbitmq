@@ -1,5 +1,5 @@
 @echo off
-REM Скрипт для сборки разделенной архитектуры rtl_433 в Windows
+REM Script for building split architecture rtl_433 on Windows
 
 setlocal EnableDelayedExpansion
 
@@ -97,7 +97,7 @@ if "%~1"=="--install" (
     shift
     goto :parse_args
 )
-echo Неизвестный параметр: %~1
+echo Unknown parameter: %~1
 goto :show_help
 
 :show_help

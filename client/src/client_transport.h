@@ -1,5 +1,5 @@
 /** @file
-    Транспортный слой для rtl_433_client.
+    Transport layer for rtl_433_client.
     
     Copyright (C) 2024
     
@@ -17,104 +17,106 @@
 #include "bitbuffer.h"
 #include <time.h>
 
-/// Структура для передачи демодулированных данных
+/// Structure for transmitting demodulated data
 typedef struct demod_data {
-    char *device_id;           // Идентификатор устройства-источника
-    uint64_t timestamp_us;     // Временная метка в микросекундах
-    uint32_t frequency;        // Частота приема
-    uint32_t sample_rate;      // Частота дискретизации
-    float rssi_db;             // Уровень сигнала в dB
-    float snr_db;              // Отношение сигнал/шум в dB
-    float noise_db;            // Уровень шума в dB
+    char *device_id;           // Source device identifier
+    uint64_t timestamp_us;     // Timestamp in microseconds
+    uint32_t frequency;        // Reception frequency
+    uint32_t sample_rate;      // Sample rate
+    float rssi_db;             // Signal level in dB
+    float snr_db;              // Signal-to-noise ratio in dB
+    float noise_db;            // Noise level in dB
     
-    // Данные о пульсах
+    // Pulse data
     pulse_data_t pulse_data;
     
-    // Альтернативно - битовый буфер (для FSK)
+    // Alternatively - bit buffer (for FSK)
     bitbuffer_t *bitbuffer;
     
-    // Метаданные
-    int ook_detected;          // 1 если обнаружен OOK сигнал
-    int fsk_detected;          // 1 если обнаружен FSK сигнал
-    char *raw_data_hex;        // Сырые данные в hex (опционально)
+    // Metadata
+    int ook_detected;          // 1 if OOK signal detected
+    int fsk_detected;          // 1 if FSK signal detected
+    char *raw_data_hex;        // Raw data in hex (optional)
+    unsigned long package_id;  // Package ID for linking with raw data
 } demod_data_t;
 
-/// Структура транспортного соединения
+/// Transport connection structure
 typedef struct transport_connection {
     transport_config_t *config;
-    void *connection_data;     // Указатель на специфичные для транспорта данные
+    void *connection_data;     // Pointer to transport-specific data
     int connected;
     time_t last_reconnect_attempt;
 } transport_connection_t;
 
-/// Инициализировать транспортное соединение
+/// Initialize transport connection
 int transport_init(transport_connection_t *conn, transport_config_t *config);
 
-/// Подключиться к серверу
+/// Connect to server
 int transport_connect(transport_connection_t *conn);
 
-/// Отключиться от сервера
+/// Disconnect from server
 void transport_disconnect(transport_connection_t *conn);
 
-/// Отправить демодулированные данные
+/// Send demodulated data
 int transport_send_demod_data(transport_connection_t *conn, const demod_data_t *data);
 int transport_send_demod_data_to_queue(transport_connection_t *conn, const demod_data_t *data, const char *queue_name);
 
-/// Отправить pulse data
+/// Send pulse data
 int transport_send_pulse_data(transport_connection_t *conn, const pulse_data_t *pulse_data);
 int transport_send_pulse_data_to_queue(transport_connection_t *conn, const pulse_data_t *pulse_data, const char *queue_name);
+int transport_send_pulse_data_with_id(transport_connection_t *conn, const pulse_data_t *pulse_data, const char *queue_name, unsigned long package_id);
 
-/// Отправить батч демодулированных данных
+/// Send batch of demodulated data
 int transport_send_demod_batch(transport_connection_t *conn, const demod_data_t *data_array, int count);
 
-/// Проверить состояние соединения
+/// Check connection status
 int transport_is_connected(const transport_connection_t *conn);
 
-/// Освободить ресурсы транспорта
+/// Free transport resources
 void transport_cleanup(transport_connection_t *conn);
 
-/// Создать структуру demod_data
+/// Create demod_data structure
 demod_data_t *demod_data_create(void);
 
-/// Освободить структуру demod_data
+/// Free demod_data structure
 void demod_data_free(demod_data_t *data);
 
-/// Копировать pulse_data в demod_data
+/// Copy pulse_data to demod_data
 void demod_data_set_pulse_data(demod_data_t *data, const pulse_data_t *pulse_data);
 
-/// Копировать bitbuffer в demod_data
+/// Copy bitbuffer to demod_data
 void demod_data_set_bitbuffer(demod_data_t *data, const bitbuffer_t *bitbuffer);
 
-/// Сериализовать demod_data в JSON
+/// Serialize demod_data to JSON
 char *demod_data_to_json(const demod_data_t *data);
 
-/// Сериализовать массив demod_data в JSON
+/// Serialize demod_data array to JSON
 char *demod_data_batch_to_json(const demod_data_t *data_array, int count);
 
-// Специфичные функции для каждого транспорта
+// Transport-specific functions
 
 #ifdef ENABLE_MQTT
-/// MQTT специфичные функции
+/// MQTT specific functions
 int transport_mqtt_init(transport_connection_t *conn);
 int transport_mqtt_connect(transport_connection_t *conn);
 int transport_mqtt_send(transport_connection_t *conn, const char *json_data);
 void transport_mqtt_cleanup(transport_connection_t *conn);
 #endif
 
-/// HTTP специфичные функции
+/// HTTP specific functions
 int transport_http_init(transport_connection_t *conn);
 int transport_http_send(transport_connection_t *conn, const char *json_data);
 void transport_http_cleanup(transport_connection_t *conn);
 
 #ifdef ENABLE_RABBITMQ
-/// RabbitMQ специфичные функции
+/// RabbitMQ specific functions
 int transport_rabbitmq_init(transport_connection_t *conn);
 int transport_rabbitmq_connect(transport_connection_t *conn);
 int transport_rabbitmq_send(transport_connection_t *conn, const char *json_data);
 void transport_rabbitmq_cleanup(transport_connection_t *conn);
 #endif
 
-/// TCP/UDP специфичные функции
+/// TCP/UDP specific functions
 int transport_socket_init(transport_connection_t *conn);
 int transport_socket_connect(transport_connection_t *conn);
 int transport_socket_send(transport_connection_t *conn, const char *json_data);
