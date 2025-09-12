@@ -97,7 +97,7 @@ static int process_cu8_file(const char *filename)
             memset(fm_buf, 0, n_samples * sizeof(int16_t));
         }
         
-        print_logf(LOG_DEBUG, "Client", "Read %lu samples, avg_db=%.1f", n_samples, avg_db);
+        // Removed: excessive logging of sample count
         
         // Debug: Print first few AM samples
         if (packages_found < 2) {
@@ -134,12 +134,22 @@ static int process_cu8_file(const char *filename)
                 print_logf(LOG_INFO, "Client", "Detected OOK package #%u with %u pulses", 
                           packages_found, pulse_data.num_pulses);
                           
-                // Step 4: Use pulse_analyzer for detailed analysis (like rtl_433 -A)
-                r_device device = {.log_fn = log_device_handler, .output_ctx = g_cfg};
-                pulse_analyzer(&pulse_data, package_type, &device);
-                
-                // Step 5: Send analyzed pulse data via transport
+                // Step 4a: Always send pulse_data first (raw demodulated data)
                 client_pulse_handler(&pulse_data);
+                
+                // Step 4b: Try to decode devices (this will call client_data_acquired_handler if successful)
+                int ook_events = run_ook_demods(&g_cfg->demod->r_devs, &pulse_data);
+                
+                if (ook_events > 0) {
+                    print_logf(LOG_INFO, "Client", "OOK package #%u decoded %d device events", packages_found, ook_events);
+                } else {
+                    // If no devices decoded, optionally use pulse_analyzer for debugging
+                    if (g_cfg->verbosity >= LOG_DEBUG) {
+                        r_device device = {.log_fn = log_device_handler, .output_ctx = g_cfg};
+                        pulse_analyzer(&pulse_data, package_type, &device);
+                    }
+                    print_logf(LOG_DEBUG, "Client", "OOK package #%u: no devices decoded", packages_found);
+                }
             }
             
             if (package_type == PULSE_DATA_FSK && fsk_pulse_data.num_pulses > 0) {
@@ -149,9 +159,22 @@ static int process_cu8_file(const char *filename)
                 print_logf(LOG_INFO, "Client", "Detected FSK package #%u with %u pulses", 
                           packages_found, fsk_pulse_data.num_pulses);
                           
-                r_device device = {.log_fn = log_device_handler, .output_ctx = g_cfg};
-                pulse_analyzer(&fsk_pulse_data, package_type, &device);
+                // Step 4a: Always send pulse_data first (raw demodulated data)
                 client_pulse_handler(&fsk_pulse_data);
+                
+                // Step 4b: Try to decode devices (this will call client_data_acquired_handler if successful)
+                int fsk_events = run_fsk_demods(&g_cfg->demod->r_devs, &fsk_pulse_data);
+                
+                if (fsk_events > 0) {
+                    print_logf(LOG_INFO, "Client", "FSK package #%u decoded %d device events", packages_found, fsk_events);
+                } else {
+                    // If no devices decoded, optionally use pulse_analyzer for debugging
+                    if (g_cfg->verbosity >= LOG_DEBUG) {
+                        r_device device = {.log_fn = log_device_handler, .output_ctx = g_cfg};
+                        pulse_analyzer(&fsk_pulse_data, package_type, &device);
+                    }
+                    print_logf(LOG_DEBUG, "Client", "FSK package #%u: no devices decoded", packages_found);
+                }
             }
         }
     }
@@ -363,19 +386,21 @@ static void client_sdr_callback(sdr_event_t *ev, void *ctx)
                           package_type, pulse_data.num_pulses, fsk_pulse_data.num_pulses);
             }
                                                
-            // Step 3: Process detected packages with pulse_analyzer (like rtl_433 -A)
+            // Step 3: Process detected packages - decode devices only, no raw pulse_data
             if (package_type == PULSE_DATA_OOK && pulse_data.num_pulses > 0) {
                 calc_rssi_snr(cfg, &pulse_data);
                 
                 print_logf(LOG_INFO, "SDR", "Detected OOK package with %u pulses (avg_db=%.1f)", 
                           pulse_data.num_pulses, avg_db);
                           
-                // Use pulse_analyzer for detailed analysis
-                r_device device = {.log_fn = log_device_handler, .output_ctx = cfg};
-                pulse_analyzer(&pulse_data, package_type, &device);
+                // Try to decode devices (this will call client_data_acquired_handler if successful)
+                int ook_events = run_ook_demods(&cfg->demod->r_devs, &pulse_data);
                 
-                // Send real analyzed data
-                client_pulse_handler(&pulse_data);
+                if (ook_events > 0) {
+                    print_logf(LOG_INFO, "SDR", "OOK package decoded %d device events", ook_events);
+                } else {
+                    print_logf(LOG_DEBUG, "SDR", "OOK package: no devices decoded");
+                }
             }
             
             if (package_type == PULSE_DATA_FSK && fsk_pulse_data.num_pulses > 0) {
@@ -384,9 +409,19 @@ static void client_sdr_callback(sdr_event_t *ev, void *ctx)
                 print_logf(LOG_INFO, "SDR", "Detected FSK package with %u pulses (avg_db=%.1f)", 
                           fsk_pulse_data.num_pulses, avg_db);
                           
-                r_device device = {.log_fn = log_device_handler, .output_ctx = cfg};
-                pulse_analyzer(&fsk_pulse_data, package_type, &device);
-                client_pulse_handler(&fsk_pulse_data);
+                // Try to decode devices (this will call client_data_acquired_handler if successful)
+                int fsk_events = run_fsk_demods(&cfg->demod->r_devs, &fsk_pulse_data);
+                
+                if (fsk_events > 0) {
+                    print_logf(LOG_INFO, "SDR", "FSK package decoded %d device events", fsk_events);
+                } else {
+                    print_logf(LOG_DEBUG, "SDR", "FSK package: no devices decoded");
+                }
+            }
+            
+            // Reset pulse detector state after processing any signals
+            if (package_type == PULSE_DATA_OOK || package_type == PULSE_DATA_FSK) {
+                pulse_detect_reset(demod->pulse_detect);
             }
         }
     }
@@ -825,6 +860,24 @@ int main(int argc, char **argv)
     if (g_cfg->in_files.len > 0) {
         // File input mode - use proper IQ -> AM -> pulse pipeline
         print_log(LOG_INFO, "Client", "File input mode with proper demodulation pipeline");
+        
+        // Enable all decoders for file processing (temporarily reduce verbosity)
+        int saved_verbosity = g_cfg->verbosity;
+        g_cfg->verbosity = LOG_WARNING; // Suppress protocol registration logs
+        register_all_protocols(g_cfg, 0);
+        g_cfg->verbosity = saved_verbosity; // Restore original verbosity
+        
+        // Override all device output handlers to use our custom client handler
+        for (void **iter = g_cfg->demod->r_devs.elems; iter && *iter; ++iter) {
+            r_device *r_dev = *iter;
+            r_dev->output_fn = client_data_acquired_handler;
+            r_dev->output_ctx = g_cfg;
+        }
+        
+        print_logf(LOG_INFO, "Client", "Registered %zu device protocols for signal decoding", g_cfg->demod->r_devs.len);
+        
+        // Start outputs to trigger our data_acquired_handler
+        start_outputs(g_cfg, NULL);
         
         // Process each input file
         for (void **iter = g_cfg->in_files.elems; iter && *iter; ++iter) {
