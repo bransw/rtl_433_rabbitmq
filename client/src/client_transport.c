@@ -20,6 +20,23 @@
 #include "logger.h"
 #include "r_util.h"
 
+/// Forward declarations for RabbitMQ structure
+#ifdef ENABLE_RABBITMQ
+#include <amqp.h>
+#include <amqp_tcp_socket.h>
+// RabbitMQ connection data structure
+typedef struct {
+    amqp_connection_state_t conn;
+    amqp_socket_t *socket;
+    int channel;
+    char *exchange;
+    char *queue;
+    char *routing_key;
+} rabbitmq_data_t;
+#else
+typedef struct rabbitmq_data rabbitmq_data_t;
+#endif
+
 #ifdef ENABLE_MQTT
 #include <MQTTClient.h>
 #endif
@@ -27,8 +44,6 @@
 #include <curl/curl.h>
 
 #ifdef ENABLE_RABBITMQ
-#include <amqp.h>
-#include <amqp_tcp_socket.h>
 #endif
 
 /// Структура для HTTP ответа
@@ -212,6 +227,69 @@ int transport_send_pulse_data(transport_connection_t *conn, const pulse_data_t *
     return result;
 }
 
+int transport_send_pulse_data_to_queue(transport_connection_t *conn, const pulse_data_t *pulse_data, const char *queue_name)
+{
+    if (!conn || !pulse_data || !pulse_data->num_pulses || !queue_name) {
+        return -1;
+    }
+    
+    // Convert pulse_data to data_t and then to JSON
+    data_t *data = pulse_data_print_data(pulse_data);
+    if (!data) {
+        print_log(LOG_ERROR, "Transport", "Failed to convert pulse data");
+        return -1;
+    }
+    
+    // Create JSON string from data_t
+    char json_buffer[8192];
+    size_t json_len = data_print_jsons(data, json_buffer, sizeof(json_buffer));
+    if (json_len == 0) {
+        print_log(LOG_ERROR, "Transport", "Failed to serialize pulse data to JSON");
+        data_free(data);
+        return -1;
+    }
+    
+    char *json_str = strdup(json_buffer);
+    data_free(data);
+    
+    if (!json_str) {
+        print_log(LOG_ERROR, "Transport", "Failed to allocate memory for JSON");
+        return -1;
+    }
+    
+    int result = 0;
+    switch (conn->config->type) {
+        case TRANSPORT_RABBITMQ:
+            // Temporarily change routing key for this message
+            rabbitmq_data_t *rmq = (rabbitmq_data_t *)conn->connection_data;
+            char *original_routing_key = rmq->routing_key;
+            rmq->routing_key = strdup(queue_name);
+            result = send_rabbitmq_data(conn, json_str);
+            free(rmq->routing_key);
+            rmq->routing_key = original_routing_key;
+            break;
+        case TRANSPORT_MQTT:
+            // Temporarily change topic for this message
+            char *original_topic = conn->config->topic_queue;
+            conn->config->topic_queue = (char*)queue_name;
+            result = send_mqtt_data(conn, json_str);
+            conn->config->topic_queue = original_topic;
+            break;
+        default:
+            // For other transports, use default behavior
+            result = transport_send_pulse_data(conn, pulse_data);
+            break;
+    }
+    
+    free(json_str);
+    
+    if (result == 0) {
+        print_logf(LOG_DEBUG, "Transport", "Message sent to queue: %s", queue_name);
+    }
+    
+    return result;
+}
+
 /// Отправить демодулированные данные
 int transport_send_demod_data(transport_connection_t *conn, const demod_data_t *data)
 {
@@ -255,6 +333,58 @@ int transport_send_demod_data(transport_connection_t *conn, const demod_data_t *
     }
     
     free(json_data);
+    return result;
+}
+
+int transport_send_demod_data_to_queue(transport_connection_t *conn, const demod_data_t *data, const char *queue_name)
+{
+    if (!conn || !data || !conn->connected || !queue_name) {
+        return -1;
+    }
+    
+    // Сериализуем данные в JSON
+    char *json_data = demod_data_to_json(data);
+    if (!json_data) {
+        print_log(LOG_ERROR, "Transport", "Failed to serialize data");
+        return -1;
+    }
+    
+    int result = -1;
+    
+    switch (conn->config->type) {
+#ifdef ENABLE_RABBITMQ
+        case TRANSPORT_RABBITMQ:
+            // Temporarily change routing key for this message
+            rabbitmq_data_t *rmq = (rabbitmq_data_t *)conn->connection_data;
+            char *original_routing_key = rmq->routing_key;
+            rmq->routing_key = strdup(queue_name);
+            result = transport_rabbitmq_send(conn, json_data);
+            free(rmq->routing_key);
+            rmq->routing_key = original_routing_key;
+            break;
+#endif
+
+#ifdef ENABLE_MQTT
+        case TRANSPORT_MQTT:
+            // Temporarily change topic for this message
+            char *original_topic = conn->config->topic_queue;
+            conn->config->topic_queue = (char*)queue_name;
+            result = transport_mqtt_send(conn, json_data);
+            conn->config->topic_queue = original_topic;
+            break;
+#endif
+        default:
+            // For other transports, use default behavior
+            result = transport_send_demod_data(conn, data);
+            break;
+    }
+    
+    free(json_data);
+    
+    if (result == 0) {
+        print_logf(LOG_DEBUG, "Transport", "Device data sent to queue: %s", queue_name);
+    }
+    
     return result;
 }
 
@@ -710,16 +840,6 @@ void transport_mqtt_cleanup(transport_connection_t *conn)
 #endif
 
 #ifdef ENABLE_RABBITMQ
-
-// RabbitMQ connection data structure
-typedef struct {
-    amqp_connection_state_t conn;
-    amqp_socket_t *socket;
-    int channel;
-    char *exchange;
-    char *queue;
-    char *routing_key;
-} rabbitmq_data_t;
 
 int transport_rabbitmq_init(transport_connection_t *conn)
 {

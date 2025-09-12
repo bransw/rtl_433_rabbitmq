@@ -118,7 +118,8 @@ sudo make install
 
 #### RabbitMQ Transport
 ```bash
-# Basic RabbitMQ (AMQP)
+# Basic RabbitMQ (AMQP) - Signals will be routed automatically:
+# OOK → ook_raw, FSK → fsk_raw, Decoded → detected
 ./rtl_433_client --transport amqp://guest:guest@localhost:5672/rtl_433/signals
 
 # Custom exchange and queue
@@ -136,6 +137,27 @@ sudo make install
 # UDP socket  
 ./rtl_433_client --transport udp://224.0.0.1:12345
 ```
+
+## Message Routing (NEW)
+
+⭐ **NEW FEATURE**: The client now automatically routes different data types to separate queues/topics:
+
+### RabbitMQ Routing:
+- **OOK signals** → `ook_raw` queue (routing_key: "ook_raw")
+- **FSK signals** → `fsk_raw` queue (routing_key: "fsk_raw")  
+- **Decoded devices** → `detected` queue (routing_key: "detected")
+
+### MQTT Routing:
+- **OOK signals** → `ook_raw` topic
+- **FSK signals** → `fsk_raw` topic
+- **Decoded devices** → `detected` topic
+
+### Benefits:
+- **Separation of concerns** - Different signal types processed independently
+- **Scalability** - Configure different workers for different data types
+- **Monitoring** - Easy statistics tracking per signal type
+
+For detailed documentation, see [README_QUEUE_ROUTING.md](README_QUEUE_ROUTING.md).
 
 ## Data Format
 

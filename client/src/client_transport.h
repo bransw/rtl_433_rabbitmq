@@ -58,9 +58,11 @@ void transport_disconnect(transport_connection_t *conn);
 
 /// Отправить демодулированные данные
 int transport_send_demod_data(transport_connection_t *conn, const demod_data_t *data);
+int transport_send_demod_data_to_queue(transport_connection_t *conn, const demod_data_t *data, const char *queue_name);
 
 /// Отправить pulse data
 int transport_send_pulse_data(transport_connection_t *conn, const pulse_data_t *pulse_data);
+int transport_send_pulse_data_to_queue(transport_connection_t *conn, const pulse_data_t *pulse_data, const char *queue_name);
 
 /// Отправить батч демодулированных данных
 int transport_send_demod_batch(transport_connection_t *conn, const demod_data_t *data_array, int count);

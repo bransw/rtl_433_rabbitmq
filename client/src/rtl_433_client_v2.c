@@ -45,8 +45,9 @@ typedef struct {
 
 static client_stats_t g_stats = {0};
 
-/// Forward declaration  
+/// Forward declarations
 static void client_pulse_handler(pulse_data_t *pulse_data);
+static void client_pulse_handler_with_type(pulse_data_t *pulse_data, int modulation_type);
 
 /// Process CU8 file with proper IQ -> AM -> pulse pipeline
 static int process_cu8_file(const char *filename)
@@ -135,7 +136,7 @@ static int process_cu8_file(const char *filename)
                           packages_found, pulse_data.num_pulses);
                           
                 // Step 4a: Always send pulse_data first (raw demodulated data)
-                client_pulse_handler(&pulse_data);
+                client_pulse_handler_with_type(&pulse_data, PULSE_DATA_OOK);
                 
                 // Step 4b: Try to decode devices (this will call client_data_acquired_handler if successful)
                 int ook_events = run_ook_demods(&g_cfg->demod->r_devs, &pulse_data);
@@ -160,7 +161,7 @@ static int process_cu8_file(const char *filename)
                           packages_found, fsk_pulse_data.num_pulses);
                           
                 // Step 4a: Always send pulse_data first (raw demodulated data)
-                client_pulse_handler(&fsk_pulse_data);
+                client_pulse_handler_with_type(&fsk_pulse_data, PULSE_DATA_FSK);
                 
                 // Step 4b: Try to decode devices (this will call client_data_acquired_handler if successful)
                 int fsk_events = run_fsk_demods(&g_cfg->demod->r_devs, &fsk_pulse_data);
@@ -203,15 +204,15 @@ void client_data_acquired_handler(r_device *r_dev, data_t *data)
             demod_data.sample_rate = g_cfg->samp_rate;
             demod_data.raw_data_hex = json_str;
             
-            // Send via transport
-            int result = transport_send_demod_data(&g_transport, &demod_data);
+            // Send via transport to detected queue
+            int result = transport_send_demod_data_to_queue(&g_transport, &demod_data, "detected");
             
             if (result == 0) {
                 g_stats.signals_sent++;
-                print_logf(LOG_INFO, "Client", "Sent device data: %s", r_dev ? r_dev->name : "unknown");
+                print_logf(LOG_INFO, "Client", "Sent device data: %s to queue: detected", r_dev ? r_dev->name : "unknown");
             } else {
                 g_stats.send_errors++;
-                print_log(LOG_WARNING, "Client", "Failed to send device data");
+                print_logf(LOG_WARNING, "Client", "Failed to send device data: %s to queue: detected", r_dev ? r_dev->name : "unknown");
             }
             
             // Cleanup
@@ -251,23 +252,43 @@ static void print_statistics(void)
 
 // Removed unused client_event_handler
 
-/// Custom pulse handler - sends raw pulse data to server
-static void client_pulse_handler(pulse_data_t *pulse_data)
+/// Custom pulse handler - sends raw pulse data to server with appropriate queue routing
+static void client_pulse_handler_with_type(pulse_data_t *pulse_data, int modulation_type)
 {
     if (!pulse_data || !pulse_data->num_pulses) {
         return;
     }
     
-    // Send pulse data to server via transport
-    if (transport_send_pulse_data(&g_transport, pulse_data) == 0) {
+    // Determine queue name based on modulation type
+    const char *queue_name;
+    const char *type_name;
+    if (modulation_type == PULSE_DATA_OOK) {
+        queue_name = "ook_raw";
+        type_name = "OOK";
+    } else if (modulation_type == PULSE_DATA_FSK) {
+        queue_name = "fsk_raw";
+        type_name = "FSK";
+    } else {
+        queue_name = "unknown_raw";
+        type_name = "Unknown";
+    }
+    
+    // Send pulse data to appropriate queue
+    if (transport_send_pulse_data_to_queue(&g_transport, pulse_data, queue_name) == 0) {
         g_stats.signals_sent++;
-        if (g_cfg->verbosity >= LOG_DEBUG) {
-            print_logf(LOG_DEBUG, "Client", "Sent signal: %u pulses", pulse_data->num_pulses);
-        }
+        print_logf(LOG_INFO, "Client", "Sent %s signal: %u pulses to queue: %s", 
+                  type_name, pulse_data->num_pulses, queue_name);
     } else {
         g_stats.send_errors++;
-        print_log(LOG_WARNING, "Client", "Failed to send signal");
+        print_logf(LOG_WARNING, "Client", "Failed to send %s signal to queue: %s", type_name, queue_name);
     }
+}
+
+/// Legacy pulse handler for backward compatibility
+static void client_pulse_handler(pulse_data_t *pulse_data)
+{
+    // Default to unknown type for legacy calls
+    client_pulse_handler_with_type(pulse_data, 0);
 }
 
 /// SDR event callback function - processes received samples  
