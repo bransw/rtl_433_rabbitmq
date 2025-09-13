@@ -634,6 +634,36 @@ or add
 
 to /etc/modprobe.d/blacklist.conf
 
+### Client-Server Architecture Troubleshooting
+
+For issues with the split architecture (rtl_433_client + rtl_433_server):
+
+#### **Server "Too many consecutive RabbitMQ errors"**
+This is usually caused by normal RabbitMQ connection state changes being treated as errors.
+**Solution**: The server now handles this automatically with improved error threshold (1000 errors) and proper AMQP state handling.
+
+#### **No devices decoded despite signals received**
+Check that both client and server are using optimized hex-string format:
+```bash
+# Client should show:
+Client: Sent optimized OOK signal with hex: AAB102095C5D9C8155
+
+# Server should show:
+Server: Decoded 2 devices from hex string (optimized path)
+```
+
+#### **Connection issues**
+```bash
+# Verify RabbitMQ is running
+sudo systemctl status rabbitmq-server
+
+# Test client-server communication
+./rtl_433_client -r test_signal.cu8 -T "amqp://guest:guest@localhost:5672/rtl_433" -v
+./rtl_433_server -vv
+```
+
+For detailed troubleshooting, see [server/README.md](server/README.md#troubleshooting--error-handling).
+
 ## Releases
 
 Version numbering scheme used is year.month. We try to keep the API compatible between releases but focus is on maintainablity.

@@ -304,6 +304,131 @@ RF Signal → RTL-SDR → rtl_433_client → [Transport] → rtl_433_server → 
                       (demodulation)                   (decoding)      (routing)
 ```
 
+## 🔧 **Troubleshooting & Error Handling**
+
+### **RabbitMQ Connection Issues**
+
+The server includes robust error handling for RabbitMQ connectivity issues:
+
+#### **Error Threshold System:**
+```c
+// Server monitors consecutive RabbitMQ errors
+consecutive_errors = 0;
+while (processing) {
+    if (rabbitmq_error) {
+        consecutive_errors++;
+        if (consecutive_errors > 1000) {  // Threshold: 1000 errors
+            shutdown_server();
+        }
+    } else {
+        consecutive_errors = 0;  // Reset on success
+    }
+}
+```
+
+#### **Normal vs Fatal Errors:**
+
+**✅ Normal Behavior (NOT counted as errors):**
+- `AMQP_STATUS_UNEXPECTED_STATE` - Normal RabbitMQ message consumption state
+- `AMQP_STATUS_TIMEOUT` - No messages available (expected)
+- Temporary network fluctuations
+
+**❌ Fatal Errors (counted toward threshold):**
+- RabbitMQ server unavailable
+- Authentication failures  
+- Critical AMQP protocol errors
+- Persistent connection failures
+
+#### **Error Monitoring:**
+```bash
+# Server logs every 100 consecutive errors:
+Server: RabbitMQ connection issues (100 consecutive errors, will keep trying)
+Server: RabbitMQ connection issues (200 consecutive errors, will keep trying)
+...
+Server: Too many consecutive RabbitMQ errors, shutting down  # After 1000
+```
+
+### **Common Issues & Solutions:**
+
+#### **"Too many consecutive RabbitMQ errors"**
+**Cause**: Persistent RabbitMQ connectivity problems
+**Solution**:
+```bash
+# Check RabbitMQ status
+sudo systemctl status rabbitmq-server
+
+# Restart RabbitMQ if needed
+sudo systemctl restart rabbitmq-server
+
+# Verify connection
+rabbitmqctl status
+```
+
+#### **"Failed to initialize RabbitMQ consumer"**
+**Cause**: Initial connection failure
+**Solution**:
+```bash
+# Check RabbitMQ is running
+sudo systemctl start rabbitmq-server
+
+# Verify credentials
+./rtl_433_server -H localhost -P 5672 -u guest -p guest -vv
+```
+
+#### **Server processes signals but no devices decoded**
+**Cause**: Hex-string parsing or device decoder issues
+**Debug**:
+```bash
+# Enable verbose logging
+./rtl_433_server -vv
+
+# Check for hex-string processing logs:
+Server: Successfully parsed hex string: AAB102095C5D9C8155 (5 bytes)
+Server: Decoded 2 devices from hex string (optimized path)
+```
+
+### **Performance Monitoring:**
+
+#### **Server Statistics:**
+```bash
+Server: === Runtime Statistics ===
+Server: Uptime: 300 sec
+Server: Signals received: 150
+Server: Devices decoded: 45
+Server: Unknown signals: 105
+Server: Processing errors: 0
+Server: Rate: 30.0 signals/min
+Server: Recognition rate: 30.0%
+```
+
+#### **Key Metrics:**
+- **Recognition rate**: Percentage of signals successfully decoded
+- **Processing errors**: JSON parsing or device decoder failures
+- **Rate**: Signals processed per minute
+- **Uptime**: Server stability indicator
+
+### **Debugging Tips:**
+
+#### **Enable Debug Logging:**
+```bash
+./rtl_433_server -vv  # Maximum verbosity
+```
+
+#### **Monitor RabbitMQ Queues:**
+```bash
+# Check queue status
+rabbitmqctl list_queues name messages consumers
+
+# Monitor message flow
+rabbitmqctl list_exchanges name type
+```
+
+#### **Test Client-Server Communication:**
+```bash
+# Test with known good signal file
+./rtl_433_client -r test_signal.cu8 -T "amqp://guest:guest@localhost:5672/rtl_433" -v
+```
+
 ## 🛠️ **Next Development Steps**
 
 ### **Priority 1 - Core Functionality:**
