@@ -892,46 +892,65 @@ static int init_rabbitmq_consumer(void)
 /// Process RabbitMQ messages with timeout
 static int process_rabbitmq_messages(void)
 {
-    struct timeval timeout = {0, 10000}; // 10ms timeout
-    amqp_envelope_t envelope;
+    int messages_processed = 0;
+    int max_messages_per_batch = 10; // Process up to 10 messages per call
     
-    amqp_rpc_reply_t result = amqp_consume_message(g_rmq_conn, &envelope, &timeout, 0);
-    
-    if (result.reply_type == AMQP_RESPONSE_NORMAL) {
-        // Process the message
-        process_pulse_message(&envelope);
+    // Process multiple messages in one call to avoid message backlog
+    for (int i = 0; i < max_messages_per_batch; i++) {
+        struct timeval timeout = {0, 1000}; // 1ms timeout for subsequent messages
+        amqp_envelope_t envelope;
         
-        // Acknowledge the message
-        amqp_basic_ack(g_rmq_conn, g_rmq_channel, envelope.delivery_tag, 0);
+        amqp_rpc_reply_t result = amqp_consume_message(g_rmq_conn, &envelope, &timeout, 0);
         
-        // Clean up
-        amqp_destroy_envelope(&envelope);
-        
-        update_stats(1, 0, 0, 0);
-        return 0;
-    } else if (result.reply_type == AMQP_RESPONSE_LIBRARY_EXCEPTION && 
-               result.library_error == AMQP_STATUS_TIMEOUT) {
-        // Timeout is normal, no message available
-        return 0;
-    } else if (result.reply_type == AMQP_RESPONSE_LIBRARY_EXCEPTION) {
-        if (result.library_error == AMQP_STATUS_UNEXPECTED_STATE) {
-            // Connection state issue - this is common and usually recovers
-            if (g_cfg.verbosity >= LOG_DEBUG) {
-                print_logf(LOG_DEBUG, "Server", "RabbitMQ connection state error (normal, will recover)");
+        if (result.reply_type == AMQP_RESPONSE_NORMAL) {
+            // Process the message
+            process_pulse_message(&envelope);
+            
+            // Acknowledge the message
+            amqp_basic_ack(g_rmq_conn, g_rmq_channel, envelope.delivery_tag, 0);
+            
+            // Clean up
+            amqp_destroy_envelope(&envelope);
+            
+            update_stats(1, 0, 0, 0);
+            messages_processed++;
+            
+            if (g_cfg.verbosity >= LOG_TRACE) {
+                print_logf(LOG_TRACE, "Server", "Processed message %d in batch", messages_processed);
             }
-            return 0; // Don't treat as error - this is normal behavior
+            
+        } else if (result.reply_type == AMQP_RESPONSE_LIBRARY_EXCEPTION && 
+                   result.library_error == AMQP_STATUS_TIMEOUT) {
+            // Timeout - no more messages available, break the loop
+            if (messages_processed > 0 && g_cfg.verbosity >= LOG_DEBUG) {
+                print_logf(LOG_DEBUG, "Server", "Processed %d messages in batch, no more available", messages_processed);
+            }
+            break;
+            
+        } else if (result.reply_type == AMQP_RESPONSE_LIBRARY_EXCEPTION) {
+            if (result.library_error == AMQP_STATUS_UNEXPECTED_STATE) {
+                // Connection state issue - this is common and usually recovers
+                if (g_cfg.verbosity >= LOG_DEBUG) {
+                    print_logf(LOG_DEBUG, "Server", "RabbitMQ connection state error (normal, will recover)");
+                }
+                break; // Exit batch processing, but don't treat as error
+            } else {
+                if (g_cfg.verbosity >= LOG_DEBUG) {
+                    print_logf(LOG_DEBUG, "Server", "RabbitMQ library error: %d", result.library_error);
+                }
+                break; // Exit batch processing, but don't treat as error
+            }
         } else {
             if (g_cfg.verbosity >= LOG_DEBUG) {
-                print_logf(LOG_DEBUG, "Server", "RabbitMQ library error: %d", result.library_error);
+                print_logf(LOG_DEBUG, "Server", "RabbitMQ consume error, reply_type: %d", result.reply_type);
             }
-            return 0; // Don't treat other library errors as fatal
+            break; // Exit batch processing, but don't treat as error
         }
-    } else {
-        if (g_cfg.verbosity >= LOG_DEBUG) {
-            print_logf(LOG_DEBUG, "Server", "RabbitMQ consume error, reply_type: %d", result.reply_type);
-        }
-        return 0; // Don't treat as fatal to avoid server shutdown
     }
+    
+    // Always return 0 (success) to avoid triggering consecutive error counter
+    // Only real connection failures should be treated as errors
+    return 0;
 }
 
 /// Cleanup RabbitMQ connection
