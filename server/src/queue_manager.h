@@ -1,5 +1,5 @@
 /** @file
-    Менеджер очередей для rtl_433_server.
+    Queue manager for rtl_433_server.
     
     Copyright (C) 2024
     
@@ -18,84 +18,84 @@
 #include <pthread.h>
 #include <time.h>
 
-/// Типы сообщений в очередях
+/// Message types in queues
 typedef enum {
-    QUEUE_MSG_DECODED_DEVICE,    // Успешно декодированное устройство
-    QUEUE_MSG_UNKNOWN_SIGNAL,    // Неизвестный сигнал
-    QUEUE_MSG_RAW_PULSE_DATA,    // Сырые данные пульсов
-    QUEUE_MSG_STATISTICS,        // Статистика
-    QUEUE_MSG_ERROR,             // Сообщение об ошибке
-    QUEUE_MSG_HEARTBEAT          // Heartbeat сообщение
+    QUEUE_MSG_DECODED_DEVICE,    // Successfully decoded device
+    QUEUE_MSG_UNKNOWN_SIGNAL,    // Unknown signal
+    QUEUE_MSG_RAW_PULSE_DATA,    // Raw pulse data
+    QUEUE_MSG_STATISTICS,        // Statistics
+    QUEUE_MSG_ERROR,             // Error message
+    QUEUE_MSG_HEARTBEAT          // Heartbeat message
 } queue_message_type_t;
 
-/// Структура сообщения в очереди
+/// Queue message structure
 typedef struct queue_message {
     queue_message_type_t type;
     uint64_t timestamp_us;
-    char *source_id;             // Идентификатор источника (клиента)
+    char *source_id;             // Source identifier (client)
     
     union {
-        // Для декодированных устройств
+        // For decoded devices
         struct {
             char *device_name;
             int device_id;
-            data_t *device_data;     // Декодированные данные устройства
-            float confidence;        // Уверенность в декодировании (0.0-1.0)
-            pulse_data_t pulse_data; // Исходные данные пульсов
+            data_t *device_data;     // Decoded device data
+            float confidence;        // Decoding confidence (0.0-1.0)
+            pulse_data_t pulse_data; // Original pulse data
         } decoded_device;
         
-        // Для неизвестных сигналов
+        // For unknown signals
         struct {
             pulse_data_t pulse_data;
-            char *raw_data_hex;      // Сырые данные в hex
-            float signal_strength;   // Сила сигнала
-            char *analysis_notes;    // Заметки анализа
+            char *raw_data_hex;      // Raw data in hex
+            float signal_strength;   // Signal strength
+            char *analysis_notes;    // Analysis notes
         } unknown_signal;
         
-        // Для статистики
+        // For statistics
         struct {
             char *stats_json;
         } statistics;
         
-        // Для ошибок
+        // For errors
         struct {
             int error_code;
             char *error_message;
         } error;
     } data;
     
-    struct queue_message *next;  // Для связанного списка
+    struct queue_message *next;  // For linked list
 } queue_message_t;
 
-/// Структура очереди
+/// Queue structure
 typedef struct message_queue {
     char *name;
     output_queue_config_t *config;
     
-    // Очередь сообщений
+    // Message queue
     queue_message_t *head;
     queue_message_t *tail;
     int size;
     int max_size;
     
-    // Синхронизация
+    // Synchronization
     pthread_mutex_t mutex;
     pthread_cond_t not_empty;
     pthread_cond_t not_full;
     
-    // Статистика
+    // Statistics
     uint64_t messages_sent;
     uint64_t messages_dropped;
     uint64_t bytes_sent;
     time_t created_time;
     time_t last_message_time;
     
-    // Состояние
+    // State
     int active;
     int connected;
-    void *transport_data;        // Данные транспорта
+    void *transport_data;        // Transport data
     
-    // Пакетная обработка
+    // Batch processing
     queue_message_t **batch_buffer;
     int batch_size;
     int batch_count;
@@ -104,20 +104,20 @@ typedef struct message_queue {
     pthread_t worker_thread;
 } message_queue_t;
 
-/// Менеджер очередей
+/// Queue manager
 typedef struct queue_manager {
-    message_queue_t *ready_queue;     // Очередь для готовых устройств
-    message_queue_t *unknown_queue;   // Очередь для неизвестных сигналов
+    message_queue_t *ready_queue;     // Queue for ready devices
+    message_queue_t *unknown_queue;   // Queue for unknown signals
     
-    list_t additional_queues;         // Дополнительные очереди
+    list_t additional_queues;         // Additional queues
     
-    // Конфигурация
+    // Configuration
     server_config_t *config;
     
-    // Синхронизация
+    // Synchronization
     pthread_mutex_t manager_mutex;
     
-    // Статистика
+    // Statistics
     uint64_t total_messages_processed;
     uint64_t total_bytes_processed;
     time_t start_time;
@@ -125,22 +125,22 @@ typedef struct queue_manager {
     int shutdown_requested;
 } queue_manager_t;
 
-/// Инициализировать менеджер очередей
+/// Initialize queue manager
 int queue_manager_init(queue_manager_t *manager, server_config_t *config);
 
-/// Запустить менеджер очередей
+/// Start queue manager
 int queue_manager_start(queue_manager_t *manager);
 
-/// Остановить менеджер очередей
+/// Stop queue manager
 void queue_manager_stop(queue_manager_t *manager);
 
-/// Освободить ресурсы менеджера очередей
+/// Free queue manager resources
 void queue_manager_cleanup(queue_manager_t *manager);
 
-/// Проверить работает ли менеджер очередей
+/// Check if queue manager is running
 int queue_manager_is_running(const queue_manager_t *manager);
 
-/// Отправить сообщение в очередь готовых устройств
+/// Send message to ready devices queue
 int queue_manager_send_decoded_device(queue_manager_t *manager, 
                                      const char *source_id,
                                      const char *device_name,
@@ -149,7 +149,7 @@ int queue_manager_send_decoded_device(queue_manager_t *manager,
                                      float confidence,
                                      const pulse_data_t *pulse_data);
 
-/// Отправить сообщение в очередь неизвестных сигналов
+/// Send message to unknown signals queue
 int queue_manager_send_unknown_signal(queue_manager_t *manager,
                                      const char *source_id,
                                      const pulse_data_t *pulse_data,
@@ -157,55 +157,55 @@ int queue_manager_send_unknown_signal(queue_manager_t *manager,
                                      float signal_strength,
                                      const char *analysis_notes);
 
-/// Отправить статистику
+/// Send statistics
 int queue_manager_send_statistics(queue_manager_t *manager,
                                  const char *source_id,
                                  const char *stats_json);
 
-/// Отправить сообщение об ошибке
+/// Send error message
 int queue_manager_send_error(queue_manager_t *manager,
                             const char *source_id,
                             int error_code,
                             const char *error_message);
 
-/// Получить статистику очередей
+/// Get queue statistics
 char *queue_manager_get_statistics(queue_manager_t *manager);
 
-/// Функции для работы с отдельными очередями
+/// Functions for working with individual queues
 
-/// Создать очередь
+/// Create queue
 message_queue_t *message_queue_create(const char *name, output_queue_config_t *config);
 
-/// Уничтожить очередь
+/// Destroy queue
 void message_queue_destroy(message_queue_t *queue);
 
-/// Отправить сообщение в очередь
+/// Send message to queue
 int message_queue_send(message_queue_t *queue, queue_message_t *message);
 
-/// Получить сообщение из очереди (блокирующий вызов)
+/// Get message from queue (blocking call)
 queue_message_t *message_queue_receive(message_queue_t *queue, int timeout_ms);
 
-/// Проверить размер очереди
+/// Check queue size
 int message_queue_size(message_queue_t *queue);
 
-/// Очистить очередь
+/// Clear queue
 void message_queue_clear(message_queue_t *queue);
 
-/// Функции для работы с сообщениями
+/// Functions for working with messages
 
-/// Создать сообщение
+/// Create message
 queue_message_t *queue_message_create(queue_message_type_t type);
 
-/// Уничтожить сообщение
+/// Destroy message
 void queue_message_destroy(queue_message_t *message);
 
-/// Сериализовать сообщение в JSON
+/// Serialize message to JSON
 char *queue_message_to_json(const queue_message_t *message);
 
-/// Десериализовать сообщение из JSON
+/// Deserialize message from JSON
 queue_message_t *queue_message_from_json(const char *json);
 
-/// Скопировать сообщение
+/// Copy message
 queue_message_t *queue_message_copy(const queue_message_t *message);
 
 #endif // QUEUE_MANAGER_H

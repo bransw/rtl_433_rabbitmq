@@ -1,5 +1,5 @@
 /** @file
-    Конфигурация для rtl_433_server.
+    Configuration for rtl_433_server.
     
     Copyright (C) 2024
     
@@ -15,7 +15,7 @@
 #include <stdint.h>
 #include "list.h"
 
-/// Типы входящих транспортов
+/// Input transport types
 typedef enum {
     INPUT_TRANSPORT_HTTP,
     INPUT_TRANSPORT_MQTT,
@@ -24,7 +24,7 @@ typedef enum {
     INPUT_TRANSPORT_UDP
 } input_transport_type_t;
 
-/// Типы выходных очередей
+/// Output queue types
 typedef enum {
     OUTPUT_QUEUE_MQTT,
     OUTPUT_QUEUE_RABBITMQ,
@@ -34,7 +34,7 @@ typedef enum {
     OUTPUT_QUEUE_WEBSOCKET
 } output_queue_type_t;
 
-/// Конфигурация входящего транспорта
+/// Input transport configuration
 typedef struct input_transport_config {
     input_transport_type_t type;
     char *host;
@@ -51,7 +51,7 @@ typedef struct input_transport_config {
     int timeout_ms;
 } input_transport_config_t;
 
-/// Конфигурация выходной очереди
+/// Output queue configuration
 typedef struct output_queue_config {
     output_queue_type_t type;
     char *name;
@@ -73,100 +73,100 @@ typedef struct output_queue_config {
     int max_queue_size;
 } output_queue_config_t;
 
-/// Конфигурация декодера устройств
+/// Device decoder configuration
 typedef struct decoder_config {
     int device_id;
     char *device_name;
     int enabled;
     int priority;
-    char *parameters;  // Дополнительные параметры для декодера
+    char *parameters;  // Additional parameters for decoder
 } decoder_config_t;
 
-/// Конфигурация сервера
+/// Server configuration
 typedef struct server_config {
-    // Входящие транспорты
+    // Input transports
     list_t input_transports;
     
-    // Выходные очереди
-    output_queue_config_t ready_queue;      // Очередь для распознанных устройств
-    output_queue_config_t unknown_queue;    // Очередь для неизвестных сигналов
+    // Output queues
+    output_queue_config_t ready_queue;      // Queue for recognized devices
+    output_queue_config_t unknown_queue;    // Queue for unknown signals
     
-    // Декодеры устройств
+    // Device decoders
     list_t decoders;
     
-    // Настройки обработки
-    int max_concurrent_signals;    // Максимальное количество одновременно обрабатываемых сигналов
-    int signal_timeout_ms;         // Таймаут обработки одного сигнала
-    int batch_processing;          // Включить пакетную обработку
-    int batch_size;                // Размер пакета
-    int batch_timeout_ms;          // Таймаут пакета
+    // Processing settings
+    int max_concurrent_signals;    // Maximum number of concurrently processed signals
+    int signal_timeout_ms;         // Timeout for processing one signal
+    int batch_processing;          // Enable batch processing
+    int batch_size;                // Batch size
+    int batch_timeout_ms;          // Batch timeout
     
-    // Настройки базы данных для неизвестных сигналов
+    // Database settings for unknown signals
     char *unknown_signals_db_path;
-    int db_retention_days;         // Время хранения неизвестных сигналов
-    int db_max_size_mb;            // Максимальный размер базы данных
+    int db_retention_days;         // Retention time for unknown signals
+    int db_max_size_mb;            // Maximum database size
     
-    // Веб-интерфейс
+    // Web interface
     int web_enabled;
     char *web_host;
     int web_port;
     char *web_static_path;
     
-    // Логирование
+    // Logging
     int verbosity;
     char *log_file;
     int log_rotation;
     int log_max_size_mb;
     int log_max_files;
     
-    // Мониторинг и статистика
+    // Monitoring and statistics
     int stats_enabled;
     int stats_interval_sec;
     char *stats_output_file;
     
-    // Режимы работы
+    // Operating modes
     int daemon_mode;
     char *pid_file;
     char *user;
     char *group;
     
-    // Производительность
-    int worker_threads;            // Количество рабочих потоков
-    int io_threads;                // Количество I/O потоков
-    int queue_buffer_size;         // Размер буферов очередей
+    // Performance
+    int worker_threads;            // Number of worker threads
+    int io_threads;                // Number of I/O threads
+    int queue_buffer_size;         // Queue buffer size
 } server_config_t;
 
-/// Инициализировать конфигурацию сервера с значениями по умолчанию
+/// Initialize server configuration with default values
 void server_config_init(server_config_t *cfg);
 
-/// Освободить память конфигурации
+/// Free configuration memory
 void server_config_free(server_config_t *cfg);
 
-/// Загрузить конфигурацию из файла
+/// Load configuration from file
 int server_config_load_file(server_config_t *cfg, const char *filename);
 
-/// Парсить аргументы командной строки
+/// Parse command line arguments
 int server_config_parse_args(server_config_t *cfg, int argc, char **argv);
 
-/// Печать справки
+/// Print help
 void server_config_print_help(const char *program_name);
 
-/// Валидация конфигурации
+/// Configuration validation
 int server_config_validate(const server_config_t *cfg);
 
-/// Добавить входящий транспорт
+/// Add input transport
 int server_config_add_input_transport(server_config_t *cfg, const input_transport_config_t *transport);
 
-/// Добавить декодер устройства
+/// Add device decoder
 int server_config_add_decoder(server_config_t *cfg, const decoder_config_t *decoder);
 
-/// Найти конфигурацию декодера по ID
+/// Find decoder configuration by ID
 decoder_config_t *server_config_find_decoder(const server_config_t *cfg, int device_id);
 
-/// Загрузить декодеры из конфигурационного файла
+/// Load decoders from configuration file
 int server_config_load_decoders(server_config_t *cfg, const char *filename);
 
-/// Сохранить конфигурацию в файл
+/// Save configuration to file
 int server_config_save_file(const server_config_t *cfg, const char *filename);
 
 #endif // SERVER_CONFIG_H
