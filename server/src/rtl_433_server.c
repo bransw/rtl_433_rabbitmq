@@ -873,10 +873,10 @@ static int init_rabbitmq_consumer(void)
                    amqp_cstring_bytes(g_server_opts.signals_queue),
                    amqp_empty_table);
     
-    // Start consuming from signals queue
+    // Start consuming from signals queue (manual ack for reliability)
     amqp_basic_consume(g_rmq_conn, g_rmq_channel,
                       amqp_cstring_bytes(g_server_opts.signals_queue),
-                      amqp_empty_bytes, 0, 1, 0, amqp_empty_table);
+                      amqp_empty_bytes, 0, 0, 0, amqp_empty_table);
     result = amqp_get_rpc_reply(g_rmq_conn);
     if (result.reply_type != AMQP_RESPONSE_NORMAL) {
         print_logf(LOG_ERROR, "Server", "Failed to start consuming from %s", g_server_opts.signals_queue);
@@ -924,6 +924,11 @@ static int process_rabbitmq_messages(void)
             // Timeout - no more messages available, break the loop
             if (messages_processed > 0 && g_cfg.verbosity >= LOG_DEBUG) {
                 print_logf(LOG_DEBUG, "Server", "Processed %d messages in batch, no more available", messages_processed);
+            }
+            // Only log "no messages" occasionally to avoid spam
+            static int no_msg_counter = 0;
+            if (messages_processed == 0 && i == 0 && g_cfg.verbosity >= LOG_TRACE && (++no_msg_counter % 1000) == 0) {
+                print_logf(LOG_TRACE, "Server", "No messages available in queue (checked %d times)", no_msg_counter);
             }
             break;
             
@@ -1169,7 +1174,10 @@ int main(int argc, char **argv)
     
     // Main server loop
     int consecutive_errors = 0;
+    int loop_count = 0;
     while (!exit_flag) {
+        loop_count++;
+        
         // Process RabbitMQ messages
         int result = process_rabbitmq_messages();
         if (result != 0) {
