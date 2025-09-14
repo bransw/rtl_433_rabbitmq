@@ -377,7 +377,8 @@ static void client_pulse_handler_with_type(pulse_data_t *pulse_data, int modulat
     // This contains ALL timing information needed for complete signal reconstruction
     char hex_string[1024] = {0};
     if (g_cfg->verbosity >= LOG_INFO) {
-        print_logf(LOG_INFO, "Client", "Generating hex string for %s signal using pulse_analyzer", type_name);
+        print_logf(LOG_INFO, "Client", "Generating hex string for %s signal (%u pulses) using pulse_analyzer", 
+                  type_name, pulse_data->num_pulses);
         
         // Redirect stderr to capture hex string
         FILE *old_stderr = stderr;
@@ -391,13 +392,26 @@ static void client_pulse_handler_with_type(pulse_data_t *pulse_data, int modulat
             // Restore stderr
             stderr = old_stderr;
             
-            // Read captured output
+            // Read captured output and show it for debugging
             rewind(temp_file);
             char line[1024];
+            int found_triq = 0;
+            if (g_cfg->verbosity >= LOG_DEBUG) {
+                print_logf(LOG_DEBUG, "Client", "pulse_analyzer output:");
+            }
             while (fgets(line, sizeof(line), temp_file)) {
+                // Show pulse_analyzer output for debugging
+                if (g_cfg->verbosity >= LOG_DEBUG) {
+                    // Remove newline for cleaner output
+                    char *newline = strchr(line, '\n');
+                    if (newline) *newline = '\0';
+                    print_logf(LOG_DEBUG, "Client", "  %s", line);
+                }
+                
                 // Look for triq.org line
                 char *triq_pos = strstr(line, "https://triq.org/pdv/#");
                 if (triq_pos) {
+                    found_triq = 1;
                     char *hex_start = triq_pos + strlen("https://triq.org/pdv/#");
                     // Copy hex string until newline or end
                     int i = 0;
@@ -409,6 +423,11 @@ static void client_pulse_handler_with_type(pulse_data_t *pulse_data, int modulat
                     break;
                 }
             }
+            
+            if (!found_triq && g_cfg->verbosity >= LOG_DEBUG) {
+                print_logf(LOG_DEBUG, "Client", "No triq.org URL found in pulse_analyzer output (signal too complex?)");
+            }
+            
             fclose(temp_file);
         } else {
             // Fallback: just run pulse_analyzer normally
@@ -558,6 +577,9 @@ static void client_sdr_callback(sdr_event_t *ev, void *ctx)
         if (demod->frame_end_ago)
             demod->frame_end_ago += n_samples;
         
+        // Reset watchdog timer (like original rtl_433)
+        cfg->watchdog++;
+        
         // Apply same proper IQ→AM→pulse pipeline as file processing
         
         // Step 1: AM demodulation (using correct buffer types)
@@ -595,7 +617,8 @@ static void client_sdr_callback(sdr_event_t *ev, void *ctx)
         // Step 2: Real pulse detection (same loop as rtl_433 and file processing)
         int package_type = PULSE_DATA_OOK; // Just to get us started
         int packages_in_buffer = 0; // Prevent infinite loops
-        while (package_type && packages_in_buffer < 10) { // Limit to max 10 packages per buffer
+        int process_frame = 1; // Control variable like original rtl_433
+        while (package_type && process_frame && packages_in_buffer < 10) { // Match original rtl_433 logic
             pulse_data_t pulse_data = {0};
             pulse_data_t fsk_pulse_data = {0};
             
@@ -609,7 +632,25 @@ static void client_sdr_callback(sdr_event_t *ev, void *ctx)
             }
             
             package_type = pulse_detect_package(demod->pulse_detect, am_buf, fm_buf, n_samples, 
-                                               cfg->samp_rate, 0, &pulse_data, &fsk_pulse_data, fpdm);
+                                               cfg->samp_rate, cfg->input_pos, &pulse_data, &fsk_pulse_data, fpdm);
+            
+            // Frame tracking (like original rtl_433)
+            if (package_type) {
+                // new package: set a first frame start if we are not tracking one already
+                if (!demod->frame_start_ago)
+                    demod->frame_start_ago = pulse_data.start_ago;
+                // always update the last frame end
+                demod->frame_end_ago = pulse_data.end_ago;
+                
+                // Check if we should continue processing this frame
+                // Stop processing if we've moved beyond the current frame
+                if (pulse_data.start_ago > demod->frame_end_ago + 1000000) { // 1 second gap
+                    process_frame = 0;
+                }
+            } else {
+                // No more packages in this buffer
+                process_frame = 0;
+            }
             
             // CRITICAL: Set sample_rate in pulse_data structures (not set by pulse_detect_package)
             pulse_data.sample_rate = cfg->samp_rate;
@@ -667,6 +708,9 @@ static void client_sdr_callback(sdr_event_t *ev, void *ctx)
         if (packages_in_buffer >= 10 && package_type != 0) {
             print_logf(LOG_WARNING, "SDR", "Hit package limit (%d) in buffer, potential infinite loop prevented", packages_in_buffer);
         }
+        
+        // Update input position (like original rtl_433)
+        cfg->input_pos += n_samples;
     }
     
     // Handle other event types
