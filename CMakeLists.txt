@@ -18,6 +18,9 @@ project(rtl433 C)
 ########################################################################
 option(BUILD_CLIENT "Build rtl_433_client for signal demodulation" OFF)
 option(BUILD_SERVER "Build rtl_433_server for device decoding" OFF)
+option(BUILD_SHARED "Build shared rtl_433 library" ON)
+option(CLIENT_MINIMAL "Build minimal client (demo) instead of full client" ON)
+option(SERVER_MINIMAL "Build minimal server (demo) instead of full server" ON)
 option(ENABLE_MQTT "Enable MQTT transport for split architecture" OFF)
 option(ENABLE_RABBITMQ "Enable RabbitMQ transport for split architecture" OFF)
 
@@ -505,11 +508,21 @@ endif()
 if(BUILD_CLIENT)
     message(STATUS "Building rtl_433_client")
     
-    set(CLIENT_SOURCES
-        client/src/rtl_433_client_v2.c
-        client/src/client_transport.c
-        # client/src/client_stubs.c  # Removed: using real SDR libraries
-    )
+    # Choose client source based on shared library usage
+    # Choose client version
+    if(CLIENT_MINIMAL)
+        set(CLIENT_SOURCES
+            client/src/rtl_433_client_shared.c
+        )
+        message(STATUS "Building minimal client (demo)")
+    else()
+        set(CLIENT_SOURCES
+            client/src/rtl_433_client_full.c
+        )
+        message(STATUS "Building full client (real pulse processing)")
+        # Full client needs main rtl_433 library
+        set(CLIENT_NEEDS_RTL433_LIB TRUE)
+    endif()
     
     add_executable(rtl_433_client ${CLIENT_SOURCES})
     
@@ -532,6 +545,18 @@ if(BUILD_CLIENT)
         ${CURL_LIBRARIES}
         m
     )
+    
+    # Link with shared library (required)
+    target_include_directories(rtl_433_client PRIVATE ${CMAKE_SOURCE_DIR}/shared/include)
+    target_link_libraries(rtl_433_client rtl433_shared)
+    target_compile_definitions(rtl_433_client PRIVATE USE_SHARED_LIBRARY)
+    add_dependencies(rtl_433_client rtl433_shared)
+    message(STATUS "rtl_433_client: Using shared rtl433 library")
+    
+    # Full client already linked with main library above, just add dependency
+    if(CLIENT_NEEDS_RTL433_LIB)
+        message(STATUS "rtl_433_client: Using main rtl_433 library for full functionality")
+    endif()
     
     # Add pthread flags like main rtl_433
     if(THREADS_HAVE_PTHREAD_ARG)
@@ -580,16 +605,20 @@ if(BUILD_SERVER)
     # Get all device decoders
     file(GLOB DEVICE_SOURCES "src/devices/*.c")
     
-    set(SERVER_SOURCES
-        ${SERVER_CORE_SOURCES}
-        ${DEVICE_SOURCES}
-        server/src/rtl_433_server.c
-        server/src/server_transport.c
-        server/src/server_config.c
-        server/src/device_decoder.c
-        server/src/queue_manager.c
-        server/src/signal_processor.c
-    )
+    # Choose server version
+    if(SERVER_MINIMAL)
+        set(SERVER_SOURCES
+            server/src/rtl_433_server_minimal.c
+        )
+        message(STATUS "Building minimal server (demo)")
+    else()
+        set(SERVER_SOURCES
+            server/src/rtl_433_server_full.c
+        )
+        message(STATUS "Building full server (real device decoding)")
+        # Full server needs main rtl_433 library
+        set(SERVER_NEEDS_RTL433_LIB TRUE)
+    endif()
     
     add_executable(rtl_433_server ${SERVER_SOURCES})
     
@@ -604,8 +633,47 @@ if(BUILD_SERVER)
         ${JSON_C_LIBRARIES}
         ${SQLITE3_LIBRARIES}
         ${CMAKE_THREAD_LIBS_INIT}
+        ${OPENSSL_LIBRARIES}
+        ${SDR_LIBRARIES}
+        ${NET_LIBRARIES}
         m
     )
+    
+    # Link with shared library (required)
+    target_include_directories(rtl_433_server PRIVATE ${CMAKE_SOURCE_DIR}/shared/include)
+    target_link_libraries(rtl_433_server rtl433_shared)
+    target_compile_definitions(rtl_433_server PRIVATE USE_SHARED_LIBRARY)
+    add_dependencies(rtl_433_server rtl433_shared)
+    message(STATUS "rtl_433_server: Using shared rtl433 library")
+    
+    # Full server needs main rtl_433 library
+    if(SERVER_NEEDS_RTL433_LIB)
+        target_link_libraries(rtl_433_server r_433)
+        add_dependencies(rtl_433_server r_433)
+        message(STATUS "rtl_433_server: Linking with main rtl_433 library for full functionality")
+    endif()
+    
+    # Add SDR libraries for full server (same as client)
+    if(LibRTLSDR_FOUND)
+        target_include_directories(rtl_433_server PRIVATE ${LibRTLSDR_INCLUDE_DIRS})
+        target_link_libraries(rtl_433_server ${LibRTLSDR_LIBRARIES})
+        target_compile_definitions(rtl_433_server PRIVATE RTLSDR)
+        message(STATUS "rtl_433_server: RTL-SDR support enabled")
+    endif()
+    
+    if(SoapySDR_FOUND)
+        target_include_directories(rtl_433_server PRIVATE ${SoapySDR_INCLUDE_DIRS})
+        target_link_libraries(rtl_433_server ${SoapySDR_LIBRARIES})
+        target_compile_definitions(rtl_433_server PRIVATE SOAPYSDR)
+        message(STATUS "rtl_433_server: SoapySDR support enabled")
+    endif()
+    
+    if(LibUSB_FOUND)
+        target_include_directories(rtl_433_server PRIVATE ${LibUSB_INCLUDE_DIRS})
+        target_link_libraries(rtl_433_server ${LibUSB_LIBRARIES})
+        target_compile_definitions(rtl_433_server PRIVATE LIBUSB1)
+        message(STATUS "rtl_433_server: LibUSB support enabled")
+    endif()
     
     if(ENABLE_MQTT AND PAHO_MQTT_INCLUDE_DIR AND PAHO_MQTT_LIBRARY)
         target_include_directories(rtl_433_server PRIVATE ${PAHO_MQTT_INCLUDE_DIR})
@@ -624,6 +692,17 @@ if(BUILD_SERVER)
             DESTINATION etc/rtl_433_server
             FILES_MATCHING PATTERN "*.conf*")
 endif()
+
+########################################################################
+# Shared Library
+########################################################################
+# Always build shared library (required)
+message(STATUS "Building shared rtl_433 library")
+add_subdirectory(shared)
+
+# Export variables for client and server
+set(RTL433_SHARED_LIBRARIES ${RTL433_SHARED_LIBRARIES})
+set(RTL433_SHARED_INCLUDE_DIR ${RTL433_SHARED_INCLUDE_DIR})
 
 ########################################################################
 # Environment detection and status

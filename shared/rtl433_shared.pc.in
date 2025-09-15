@@ -1,0 +1,12 @@
+prefix=@CMAKE_INSTALL_PREFIX@
+exec_prefix=${prefix}
+libdir=${exec_prefix}/lib
+includedir=${prefix}/include
+
+Name: rtl433_shared
+Description: Общая библиотека для rtl_433 клиента и сервера
+Version: 1.0.0
+Requires: json-c
+Libs: -L${libdir} -lrtl433_shared
+Cflags: -I${includedir}/rtl433
+
