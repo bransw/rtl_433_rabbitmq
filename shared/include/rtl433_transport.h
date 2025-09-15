@@ -80,6 +80,7 @@ void rtl433_transport_disconnect(rtl433_transport_connection_t *conn);
 /// Отправка сообщения
 int rtl433_transport_send_message(rtl433_transport_connection_t *conn, rtl433_message_t *message);
 int rtl433_transport_send_message_to_queue(rtl433_transport_connection_t *conn, rtl433_message_t *message, const char *queue_name);
+int rtl433_transport_send_raw_json_to_queue(rtl433_transport_connection_t *conn, const char *json_data, const char *queue_name);
 
 /// Прием сообщений (для сервера)
 int rtl433_transport_receive_messages(rtl433_transport_connection_t *conn, 

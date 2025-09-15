@@ -517,9 +517,9 @@ if(BUILD_CLIENT)
         message(STATUS "Building minimal client (demo)")
     else()
         set(CLIENT_SOURCES
-            client/src/rtl_433_client_full.c
+            client/src/rtl_433_client_new.c
         )
-        message(STATUS "Building full client (real pulse processing)")
+        message(STATUS "Building full client (from original rtl_433.c)")
         # Full client needs main rtl_433 library
         set(CLIENT_NEEDS_RTL433_LIB TRUE)
     endif()

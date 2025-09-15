@@ -27,6 +27,7 @@ add_library(r_433 STATIC
     output_influx.c
     output_log.c
     output_mqtt.c
+    output_rabbitmq.c
     output_rtltcp.c
     output_trigger.c
     output_udp.c
@@ -291,6 +292,9 @@ add_library(r_433 STATIC
     devices/yale_hsa.c
 )
 
+# Add include directories for shared library headers (needed for RabbitMQ output)
+target_include_directories(r_433 PRIVATE ${CMAKE_SOURCE_DIR}/shared/include)
+
 if("${CMAKE_C_COMPILER_ID}" STREQUAL "GNU" OR "${CMAKE_C_COMPILER_ID}" MATCHES "Clang")
     # untouched upstream code, disable all warnings
     set_source_files_properties(mongoose.c PROPERTIES COMPILE_FLAGS "-w")
@@ -298,6 +302,9 @@ endif()
 
 add_executable(rtl_433 rtl_433.c)
 target_link_libraries(rtl_433 r_433)
+
+# Link r_433 with shared library for RabbitMQ transport
+target_link_libraries(r_433 rtl433_shared)
 
 # target_compile_definitions was only added with CMake 2.8.11
 if(THREADS_HAVE_PTHREAD_ARG)

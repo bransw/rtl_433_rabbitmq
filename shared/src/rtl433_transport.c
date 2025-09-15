@@ -427,6 +427,43 @@ int rtl433_transport_send_message(rtl433_transport_connection_t *conn, rtl433_me
     }
 }
 
+static int rtl433_transport_rabbitmq_send_raw_to_queue(rtl433_transport_connection_t *conn, const char *json_data, const char *queue_name)
+{
+    if (!conn->connection_data || !queue_name || !json_data) return -1;
+    
+    rabbitmq_connection_data_t *rabbitmq = (rabbitmq_connection_data_t*)conn->connection_data;
+    
+    // Ensure the queue exists and is bound
+    amqp_queue_declare(rabbitmq->conn, rabbitmq->channel,
+                      amqp_cstring_bytes(queue_name),
+                      0, 1, 0, 0, amqp_empty_table);
+    
+    amqp_queue_bind(rabbitmq->conn, rabbitmq->channel,
+                   amqp_cstring_bytes(queue_name),
+                   amqp_cstring_bytes(conn->config->exchange),
+                   amqp_cstring_bytes(queue_name), // routing key = queue name
+                   amqp_empty_table);
+    
+    amqp_basic_properties_t props;
+    props._flags = AMQP_BASIC_CONTENT_TYPE_FLAG | AMQP_BASIC_DELIVERY_MODE_FLAG;
+    props.content_type = amqp_cstring_bytes("application/json");
+    props.delivery_mode = 2; // persistent
+    
+    int result = amqp_basic_publish(rabbitmq->conn, rabbitmq->channel,
+                                   amqp_cstring_bytes(conn->config->exchange),
+                                   amqp_cstring_bytes(queue_name), // Use specified queue name
+                                   0, 0, &props,
+                                   amqp_cstring_bytes(json_data));
+    
+    if (result != AMQP_STATUS_OK) {
+        g_transport_stats.send_errors++;
+        return -1;
+    }
+    
+    g_transport_stats.messages_sent++;
+    return 0;
+}
+
 int rtl433_transport_send_message_to_queue(rtl433_transport_connection_t *conn, rtl433_message_t *message, const char *queue_name)
 {
     if (!conn || !message || !conn->connected || !queue_name) return -1;
@@ -435,6 +472,20 @@ int rtl433_transport_send_message_to_queue(rtl433_transport_connection_t *conn, 
 #ifdef ENABLE_RABBITMQ
         case RTL433_TRANSPORT_RABBITMQ:
             return rtl433_transport_rabbitmq_send_to_queue(conn, message, queue_name);
+#endif
+        default:
+            return -1;
+    }
+}
+
+int rtl433_transport_send_raw_json_to_queue(rtl433_transport_connection_t *conn, const char *json_data, const char *queue_name)
+{
+    if (!conn || !json_data || !conn->connected || !queue_name) return -1;
+    
+    switch (conn->config->type) {
+#ifdef ENABLE_RABBITMQ
+        case RTL433_TRANSPORT_RABBITMQ:
+            return rtl433_transport_rabbitmq_send_raw_to_queue(conn, json_data, queue_name);
 #endif
         default:
             return -1;
