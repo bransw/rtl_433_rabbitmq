@@ -1,0 +1,30 @@
+RTL_433 Client (Full with Real Pulse Processing)
+⚠️ Note: Using simplified pulse processing
+📋 RTL_433 config initialized
+📁 Added input file: small_test.cu8
+🔗 Connected to RabbitMQ://localhost:5672/rtl_433
+🚀 Full client ready
+   Center frequency: 433.920 MHz
+   Sample rate: 2.048 MS/s
+   Verbosity: 6
+📁 Processing 1 input file(s)...
+📄 Starting file processing mode
+📂 Processing file: small_test.cu8
+✅ Reading from file: small_test.cu8
+   Format: CU8 IQ (2ch uint8)
+   Sample rate: 2048000 Hz
+   Center freq: 0.000 MHz
+📊 Processing data chunks...
+✅ File processed: 4 blocks, 0.19 seconds
+📁 All files processed successfully
+
+📊 Client Statistics:
+  Uptime: 0 seconds
+  Signals processed: 4
+  Signals sent: 0
+  Send errors: 0
+  Decode attempts: 0
+  Send success rate: 0.0%
+
+🛑 Client shutting down...
+Client finished with result: 0

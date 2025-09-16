@@ -1,0 +1,13 @@
+{
+  "name": "TemperatureSensor",
+  "description": "Generic temperature sensor with OOK PWM modulation",
+  "modulation": "OOK_PWM",
+  "flex_spec": "n=TempSensor,m=OOK_PWM,s=150,l=300,r=2000,g=400,t=50",
+  "enabled": true,
+  "priority": 0,
+  "metadata": {
+    "frequency": "433.92MHz",
+    "protocol": "Generic OOK",
+    "manufacturer": "Unknown"
+  }
+}

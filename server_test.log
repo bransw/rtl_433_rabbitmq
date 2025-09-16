@@ -1,0 +1,21 @@
+RTL_433 Server (Minimal with Shared Library)
+🔗 Connected to RabbitMQ://localhost:5672/rtl_433
+🚀 Minimal server ready, waiting for signals...
+   (This is a demo - real decoding would require full rtl_433 integration)
+
+📊 Server Statistics:
+  Uptime: 1 seconds
+  Signals received: 0
+  Devices decoded: 0
+  Unknown signals: 0
+  Errors: 0
+
+🛑 Server shutting down...
+
+📊 Server Statistics:
+  Uptime: 10 seconds
+  Signals received: 0
+  Devices decoded: 0
+  Unknown signals: 0
+  Errors: 0
+Server finished.

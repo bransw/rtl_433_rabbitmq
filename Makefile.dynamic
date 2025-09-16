@@ -1,0 +1,195 @@
+# Makefile для сборки RTL_433 с поддержкой динамической загрузки кодеков
+# 
+# Использование:
+#   make -f Makefile.dynamic          # Сборка всех компонентов
+#   make -f Makefile.dynamic test     # Запуск тестов
+#   make -f Makefile.dynamic clean    # Очистка
+#   make -f Makefile.dynamic install  # Установка
+
+CC = gcc
+CFLAGS = -Wall -Wextra -std=c99 -O2 -g
+INCLUDES = -I./include -I./src
+LIBS = -lm -lpthread
+TARGET_DIR = build_dynamic
+
+# Основные цели
+MAIN_TARGET = $(TARGET_DIR)/rtl_433_dynamic
+LIB_TARGET = $(TARGET_DIR)/librtl433_dynamic.a
+TEST_TARGET = $(TARGET_DIR)/test_dynamic_loading
+
+# Исходные файлы
+DYNAMIC_SOURCES = src/dynamic_device_loader.c
+CORE_SOURCES = src/r_api.c src/data.c src/list.c src/logger.c src/fatal.c \
+               src/jsmn.c src/optparse.c src/devices/flex.c
+MAIN_SOURCE = src/rtl_433_dynamic.c
+
+# Объектные файлы
+DYNAMIC_OBJECTS = $(DYNAMIC_SOURCES:src/%.c=$(TARGET_DIR)/%.o)
+CORE_OBJECTS = $(CORE_SOURCES:src/%.c=$(TARGET_DIR)/%.o)
+MAIN_OBJECT = $(MAIN_SOURCE:src/%.c=$(TARGET_DIR)/%.o)
+
+# Создание директорий
+DIRS = $(TARGET_DIR) $(TARGET_DIR)/devices
+
+# Главная цель
+all: directories $(MAIN_TARGET)
+
+# Создание директорий
+directories:
+	@mkdir -p $(DIRS)
+
+# Статическая библиотека
+$(LIB_TARGET): $(DYNAMIC_OBJECTS) $(CORE_OBJECTS)
+	@echo "🔗 Создание статической библиотеки..."
+	ar rcs $@ $^
+	@echo "✅ Библиотека создана: $@"
+
+# Основной исполняемый файл
+$(MAIN_TARGET): $(MAIN_OBJECT) $(LIB_TARGET)
+	@echo "🔗 Сборка основного исполняемого файла..."
+	$(CC) $(CFLAGS) -o $@ $< -L$(TARGET_DIR) -lrtl433_dynamic $(LIBS)
+	@echo "✅ Исполняемый файл создан: $@"
+
+# Компиляция объектных файлов
+$(TARGET_DIR)/%.o: src/%.c
+	@echo "🔨 Компиляция $<..."
+	@mkdir -p $(dir $@)
+	$(CC) $(CFLAGS) $(INCLUDES) -c $< -o $@
+
+# Копирование примеров
+examples: directories
+	@echo "📁 Копирование примеров..."
+	@mkdir -p $(TARGET_DIR)/devices
+	@cp -r examples/dynamic_devices/* $(TARGET_DIR)/devices/ 2>/dev/null || true
+	@echo "✅ Примеры скопированы в $(TARGET_DIR)/devices/"
+
+# Тестирование
+test: $(MAIN_TARGET) examples
+	@echo "🧪 Запуск тестов..."
+	python3 test_dynamic_loading.py --binary $(MAIN_TARGET) --create-examples
+	@echo "🔍 Тестирование загрузки примеров..."
+	$(MAIN_TARGET) -D $(TARGET_DIR)/devices -L
+	@echo "✅ Тесты завершены"
+
+# Быстрый тест без создания примеров
+quick-test: $(MAIN_TARGET)
+	@echo "⚡ Быстрый тест..."
+	python3 test_dynamic_loading.py --binary $(MAIN_TARGET)
+
+# Демонстрация работы
+demo: $(MAIN_TARGET) examples
+	@echo "🎬 Демонстрация работы динамической загрузки..."
+	@echo ""
+	@echo "1️⃣  Показать справку:"
+	$(MAIN_TARGET) -h | head -20
+	@echo ""
+	@echo "2️⃣  Показать доступные динамические кодеки:"
+	$(MAIN_TARGET) -D $(TARGET_DIR)/devices -L
+	@echo ""
+	@echo "3️⃣  Загрузить конкретный файл:"
+	$(MAIN_TARGET) -J $(TARGET_DIR)/devices/temperature_sensor.json -L
+
+# Установка
+install: $(MAIN_TARGET)
+	@echo "📦 Установка RTL_433 с динамической загрузкой..."
+	sudo cp $(MAIN_TARGET) /usr/local/bin/
+	sudo mkdir -p /usr/local/share/rtl433/devices
+	sudo cp examples/dynamic_devices/* /usr/local/share/rtl433/devices/ 2>/dev/null || true
+	@echo "✅ Установка завершена"
+	@echo "Использование: rtl_433_dynamic -D /usr/local/share/rtl433/devices -L"
+
+# Создание пакета для распространения
+package: $(MAIN_TARGET) examples
+	@echo "📦 Создание пакета для распространения..."
+	@mkdir -p package/rtl433_dynamic
+	@cp $(MAIN_TARGET) package/rtl433_dynamic/
+	@cp -r $(TARGET_DIR)/devices package/rtl433_dynamic/
+	@cp DYNAMIC_DEVICE_LOADING.md package/rtl433_dynamic/README.md
+	@cp test_dynamic_loading.py package/rtl433_dynamic/
+	@echo "#!/bin/bash" > package/rtl433_dynamic/run_demo.sh
+	@echo "cd \$$(dirname \$$0)" >> package/rtl433_dynamic/run_demo.sh
+	@echo "./rtl_433_dynamic -D ./devices -L" >> package/rtl433_dynamic/run_demo.sh
+	@chmod +x package/rtl433_dynamic/run_demo.sh
+	@tar -czf rtl433_dynamic_package.tar.gz -C package rtl433_dynamic
+	@echo "✅ Пакет создан: rtl433_dynamic_package.tar.gz"
+
+# Отладочная сборка
+debug: CFLAGS += -DDEBUG -g3 -O0
+debug: clean $(MAIN_TARGET)
+	@echo "🐛 Отладочная сборка завершена"
+
+# Профилирование
+profile: CFLAGS += -pg -fprofile-arcs -ftest-coverage
+profile: LIBS += -lgcov
+profile: clean $(MAIN_TARGET)
+	@echo "📊 Сборка с профилированием завершена"
+
+# Статический анализ
+analyze:
+	@echo "🔍 Статический анализ кода..."
+	@which cppcheck >/dev/null 2>&1 && cppcheck --enable=all --std=c99 src/ include/ || echo "cppcheck не найден"
+	@which clang-tidy >/dev/null 2>&1 && clang-tidy src/*.c -- $(INCLUDES) || echo "clang-tidy не найден"
+
+# Форматирование кода
+format:
+	@echo "🎨 Форматирование кода..."
+	@which clang-format >/dev/null 2>&1 && find src include -name "*.c" -o -name "*.h" | xargs clang-format -i || echo "clang-format не найден"
+
+# Проверка зависимостей
+check-deps:
+	@echo "🔍 Проверка зависимостей..."
+	@echo "Компилятор GCC: $$(which gcc 2>/dev/null && echo '✅' || echo '❌ Не найден')"
+	@echo "Python 3: $$(which python3 2>/dev/null && echo '✅' || echo '❌ Не найден')"
+	@echo "Make: $$(which make 2>/dev/null && echo '✅' || echo '❌ Не найден')"
+	@echo "Математическая библиотека: $$(echo '#include <math.h>' | gcc -x c -E - >/dev/null 2>&1 && echo '✅' || echo '❌ Не найдена')"
+
+# Очистка
+clean:
+	@echo "🧹 Очистка сборочных файлов..."
+	rm -rf $(TARGET_DIR)
+	rm -rf package
+	rm -f rtl433_dynamic_package.tar.gz
+	rm -f devices/*.json devices/*.ini devices/*.conf 2>/dev/null || true
+	@echo "✅ Очистка завершена"
+
+# Помощь
+help:
+	@echo "🎯 RTL_433 с динамической загрузкой кодеков"
+	@echo "=============================================="
+	@echo ""
+	@echo "Доступные команды:"
+	@echo "  make -f Makefile.dynamic              # Сборка всех компонентов"
+	@echo "  make -f Makefile.dynamic test         # Запуск тестов"
+	@echo "  make -f Makefile.dynamic demo         # Демонстрация работы"
+	@echo "  make -f Makefile.dynamic examples     # Создание примеров"
+	@echo "  make -f Makefile.dynamic install      # Установка в систему"
+	@echo "  make -f Makefile.dynamic package      # Создание пакета"
+	@echo "  make -f Makefile.dynamic debug        # Отладочная сборка"
+	@echo "  make -f Makefile.dynamic analyze      # Статический анализ"
+	@echo "  make -f Makefile.dynamic format       # Форматирование кода"
+	@echo "  make -f Makefile.dynamic check-deps   # Проверка зависимостей"
+	@echo "  make -f Makefile.dynamic clean        # Очистка"
+	@echo "  make -f Makefile.dynamic help         # Эта справка"
+	@echo ""
+	@echo "Примеры использования:"
+	@echo "  ./$(MAIN_TARGET) -D ./devices -L      # Показать кодеки"
+	@echo "  ./$(MAIN_TARGET) -J device.json       # Загрузить файл"
+	@echo "  ./$(MAIN_TARGET) -H                   # Отключить автоперезагрузку"
+
+# Информация о сборке
+info:
+	@echo "📋 Информация о сборке"
+	@echo "======================"
+	@echo "Компилятор: $(CC)"
+	@echo "Флаги: $(CFLAGS)"
+	@echo "Включения: $(INCLUDES)"
+	@echo "Библиотеки: $(LIBS)"
+	@echo "Целевая папка: $(TARGET_DIR)"
+	@echo "Основная цель: $(MAIN_TARGET)"
+
+# Псевдоцели
+.PHONY: all directories examples test quick-test demo install package debug profile analyze format check-deps clean help info
+
+# Зависимости заголовочных файлов
+$(TARGET_DIR)/dynamic_device_loader.o: include/dynamic_device_loader.h include/r_device.h
+$(TARGET_DIR)/rtl_433_dynamic.o: include/dynamic_device_loader.h src/rtl_433.c
