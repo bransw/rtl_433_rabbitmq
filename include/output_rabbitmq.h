@@ -19,3 +19,4 @@ struct mg_mgr;
 struct data_output *data_output_rabbitmq_create(struct mg_mgr *mgr, char *param, char const *dev_hint);
 
 #endif /* INCLUDE_OUTPUT_RABBITMQ_H_ */
+

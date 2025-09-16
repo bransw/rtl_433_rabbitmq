@@ -16,13 +16,13 @@ project(rtl433 C)
 ########################################################################
 # Split Architecture Options
 ########################################################################
-option(BUILD_CLIENT "Build rtl_433_client for signal demodulation" OFF)
+option(BUILD_CLIENT "Build rtl_433_client for signal demodulation" ON)
 option(BUILD_SERVER "Build rtl_433_server for device decoding" OFF)
 option(BUILD_SHARED "Build shared rtl_433 library" ON)
-option(CLIENT_MINIMAL "Build minimal client (demo) instead of full client" ON)
+option(CLIENT_MINIMAL "Build minimal client (demo) instead of full client" OFF)
 option(SERVER_MINIMAL "Build minimal server (demo) instead of full server" ON)
 option(ENABLE_MQTT "Enable MQTT transport for split architecture" OFF)
-option(ENABLE_RABBITMQ "Enable RabbitMQ transport for split architecture" OFF)
+option(ENABLE_RABBITMQ "Enable RabbitMQ transport for split architecture" ON)
 
 #select the release build type by default to get optimization flags
 if(NOT CMAKE_BUILD_TYPE)

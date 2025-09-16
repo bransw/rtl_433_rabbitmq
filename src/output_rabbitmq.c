@@ -343,3 +343,4 @@ struct data_output *data_output_rabbitmq_create(struct mg_mgr *mgr, char *param,
     
     return (struct data_output *)rabbitmq;
 }
+

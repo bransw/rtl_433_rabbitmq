@@ -181,6 +181,15 @@ static int rtl433_transport_rabbitmq_connect(rtl433_transport_connection_t *conn
                          amqp_cstring_bytes("direct"),
                          0, 1, 0, 0, amqp_empty_table);
     
+    // Проверка результата объявления exchange
+    reply = amqp_get_rpc_reply(rabbitmq->conn);
+    if (reply.reply_type != AMQP_RESPONSE_NORMAL) {
+        amqp_connection_close(rabbitmq->conn, AMQP_REPLY_SUCCESS);
+        amqp_destroy_connection(rabbitmq->conn);
+        free(rabbitmq);
+        return -1;
+    }
+    
     // Note: Queues are now created on-demand by rtl433_transport_send_message_to_queue()
     
     conn->connection_data = rabbitmq;
@@ -433,16 +442,31 @@ static int rtl433_transport_rabbitmq_send_raw_to_queue(rtl433_transport_connecti
     
     rabbitmq_connection_data_t *rabbitmq = (rabbitmq_connection_data_t*)conn->connection_data;
     
+    
     // Ensure the queue exists and is bound
     amqp_queue_declare(rabbitmq->conn, rabbitmq->channel,
                       amqp_cstring_bytes(queue_name),
                       0, 1, 0, 0, amqp_empty_table);
+    
+    // Check queue declaration result
+    amqp_rpc_reply_t reply = amqp_get_rpc_reply(rabbitmq->conn);
+    if (reply.reply_type != AMQP_RESPONSE_NORMAL) {
+        g_transport_stats.send_errors++;
+        return -1;
+    }
     
     amqp_queue_bind(rabbitmq->conn, rabbitmq->channel,
                    amqp_cstring_bytes(queue_name),
                    amqp_cstring_bytes(conn->config->exchange),
                    amqp_cstring_bytes(queue_name), // routing key = queue name
                    amqp_empty_table);
+    
+    // Check queue bind result
+    reply = amqp_get_rpc_reply(rabbitmq->conn);
+    if (reply.reply_type != AMQP_RESPONSE_NORMAL) {
+        g_transport_stats.send_errors++;
+        return -1;
+    }
     
     amqp_basic_properties_t props;
     props._flags = AMQP_BASIC_CONTENT_TYPE_FLAG | AMQP_BASIC_DELIVERY_MODE_FLAG;

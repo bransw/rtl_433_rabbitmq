@@ -292,3 +292,4 @@ int rtl433_config_test_defaults(rtl433_config_t *config)
     }
 }
 
+
