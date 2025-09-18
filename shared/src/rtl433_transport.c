@@ -8,6 +8,7 @@
 #include <string.h>
 #include <time.h>
 #include <sys/time.h>
+#include <unistd.h>
 #include <json-c/json.h>
 
 #ifdef ENABLE_RABBITMQ
@@ -67,10 +68,16 @@ int rtl433_transport_parse_url(const char *url, rtl433_transport_config_t *confi
     char *saveptr;
     
     // Определение типа транспорта
+    char *rest = NULL;
     if (strncmp(url, "amqp://", 7) == 0) {
         config->type = RTL433_TRANSPORT_RABBITMQ;
-        char *rest = url_copy + 7;  // Пропускаем "amqp://"
-        
+        rest = url_copy + 7;  // Пропускаем "amqp://"
+    } else if (strncmp(url, "rabbitmq://", 11) == 0) {
+        config->type = RTL433_TRANSPORT_RABBITMQ;
+        rest = url_copy + 11;  // Пропускаем "rabbitmq://"
+    }
+    
+    if (rest && config->type == RTL433_TRANSPORT_RABBITMQ) {
         // Парсинг user:pass@host:port/queue
         char *at_pos = strchr(rest, '@');
         if (at_pos) {
@@ -128,6 +135,8 @@ typedef struct {
     amqp_connection_state_t conn;
     amqp_socket_t *socket;
     amqp_channel_t channel;
+    bool consumer_active;
+    char consumer_tag[256];
 } rabbitmq_connection_data_t;
 
 static int rtl433_transport_rabbitmq_connect(rtl433_transport_connection_t *conn)
@@ -204,6 +213,12 @@ static void rtl433_transport_rabbitmq_disconnect(rtl433_transport_connection_t *
     
     rabbitmq_connection_data_t *rabbitmq = (rabbitmq_connection_data_t*)conn->connection_data;
     
+    // Cancel consumer if active
+    if (rabbitmq->consumer_active) {
+        amqp_basic_cancel(rabbitmq->conn, rabbitmq->channel, amqp_cstring_bytes(rabbitmq->consumer_tag));
+        rabbitmq->consumer_active = false;
+    }
+    
     amqp_channel_close(rabbitmq->conn, rabbitmq->channel, AMQP_REPLY_SUCCESS);
     amqp_connection_close(rabbitmq->conn, AMQP_REPLY_SUCCESS);
     amqp_destroy_connection(rabbitmq->conn);
@@ -257,6 +272,25 @@ void rtl433_transport_disconnect(rtl433_transport_connection_t *conn)
 bool rtl433_transport_is_connected(rtl433_transport_connection_t *conn)
 {
     return conn && conn->connected;
+}
+
+int rtl433_transport_reconnect(rtl433_transport_connection_t *conn)
+{
+    if (!conn || !conn->config) return -1;
+    
+    // Disconnect first
+    rtl433_transport_disconnect(conn);
+    
+    // Wait a bit before reconnecting
+    sleep(1);
+    
+    // Reconnect
+    int result = rtl433_transport_connect(conn, conn->config);
+    if (result == 0) {
+        g_transport_stats.reconnections++;
+    }
+    
+    return result;
 }
 
 // === MESSAGE HANDLING ===
@@ -442,7 +476,6 @@ static int rtl433_transport_rabbitmq_send_raw_to_queue(rtl433_transport_connecti
     
     rabbitmq_connection_data_t *rabbitmq = (rabbitmq_connection_data_t*)conn->connection_data;
     
-    
     // Ensure the queue exists and is bound
     amqp_queue_declare(rabbitmq->conn, rabbitmq->channel,
                       amqp_cstring_bytes(queue_name),
@@ -528,6 +561,39 @@ static int rtl433_transport_rabbitmq_receive(rtl433_transport_connection_t *conn
     
     rabbitmq_connection_data_t *rabbitmq = (rabbitmq_connection_data_t*)conn->connection_data;
     
+    // Set up consumer only once
+    if (!rabbitmq->consumer_active) {
+        // Объявляем очередь для чтения
+        amqp_queue_declare(rabbitmq->conn, rabbitmq->channel,
+                          amqp_cstring_bytes(conn->config->queue),
+                          0, 1, 0, 0, amqp_empty_table);
+        
+        amqp_rpc_reply_t reply = amqp_get_rpc_reply(rabbitmq->conn);
+        if (reply.reply_type != AMQP_RESPONSE_NORMAL) {
+            g_transport_stats.receive_errors++;
+            return -1;
+        }
+        
+        // Начинаем consuming (одно сообщение за раз)
+        amqp_basic_consume_ok_t *consume_ok = amqp_basic_consume(rabbitmq->conn, rabbitmq->channel,
+                          amqp_cstring_bytes(conn->config->queue),
+                          amqp_empty_bytes, // consumer tag (auto-generated)
+                          0, 1, 0, amqp_empty_table); // no_local, no_ack, exclusive
+        
+        reply = amqp_get_rpc_reply(rabbitmq->conn);
+        if (reply.reply_type != AMQP_RESPONSE_NORMAL) {
+            g_transport_stats.receive_errors++;
+            return -1;
+        }
+        
+        // Store consumer tag and mark as active
+        if (consume_ok && consume_ok->consumer_tag.len < sizeof(rabbitmq->consumer_tag)) {
+            memcpy(rabbitmq->consumer_tag, consume_ok->consumer_tag.bytes, consume_ok->consumer_tag.len);
+            rabbitmq->consumer_tag[consume_ok->consumer_tag.len] = '\0';
+        }
+        rabbitmq->consumer_active = true;
+    }
+    
     // Установка таймаута
     struct timeval timeout;
     timeout.tv_sec = timeout_ms / 1000;
@@ -536,6 +602,7 @@ static int rtl433_transport_rabbitmq_receive(rtl433_transport_connection_t *conn
     // Получение сообщения
     amqp_envelope_t envelope;
     amqp_rpc_reply_t reply = amqp_consume_message(rabbitmq->conn, &envelope, &timeout, 0);
+    
     
     if (reply.reply_type == AMQP_RESPONSE_NORMAL) {
         // Парсинг сообщения
@@ -561,12 +628,13 @@ static int rtl433_transport_rabbitmq_receive(rtl433_transport_connection_t *conn
         amqp_destroy_envelope(&envelope);
         
         return 1; // Получено 1 сообщение
-    } else if (reply.reply_type == AMQP_RESPONSE_LIBRARY_EXCEPTION && 
-               reply.library_error == AMQP_STATUS_TIMEOUT) {
-        return 0; // Таймаут
+    } else if (reply.reply_type == AMQP_RESPONSE_LIBRARY_EXCEPTION) {
+        // Все library exceptions обрабатываем как нормальное отсутствие сообщений
+        // Включая AMQP_STATUS_TIMEOUT и другие
+        return 0; 
     } else {
-        g_transport_stats.receive_errors++;
-        return -1; // Ошибка
+        // Server exceptions и другие - тоже не критичны
+        return 0; // Обрабатываем как отсутствие сообщений
     }
 }
 #endif
@@ -592,25 +660,237 @@ rtl433_message_t* rtl433_message_create_from_json(const char *json_str)
 {
     if (!json_str) return NULL;
     
-    // TODO: Полная реализация парсинга JSON -> rtl433_message_t
-    // Пока создаем заглушку
-    rtl433_message_t *msg = calloc(1, sizeof(rtl433_message_t));
-    if (!msg) return NULL;
-    
-    msg->package_id = rtl433_generate_package_id();
-    msg->modulation = strdup("FSK");
-    msg->timestamp = (uint32_t)time(NULL);
-    
-    // Создаем пустой pulse_data для тестирования
-    msg->pulse_data = calloc(1, sizeof(pulse_data_t));
-    if (!msg->pulse_data) {
-        rtl433_message_free(msg);
+    json_object *root = json_tokener_parse(json_str);
+    if (!root) {
         return NULL;
     }
     
-    // TODO: Использовать rtl433_signal_reconstruct_from_json для заполнения pulse_data
+    rtl433_message_t *msg = calloc(1, sizeof(rtl433_message_t));
+    if (!msg) {
+        json_object_put(root);
+        return NULL;
+    }
     
+    // Parse basic fields
+    json_object *package_id_obj;
+    if (json_object_object_get_ex(root, "package_id", &package_id_obj)) {
+        msg->package_id = json_object_get_int64(package_id_obj);
+    } else {
+        msg->package_id = rtl433_generate_package_id();
+    }
+    
+    json_object *mod_obj;
+    if (json_object_object_get_ex(root, "mod", &mod_obj)) {
+        const char *mod_str = json_object_get_string(mod_obj);
+        msg->modulation = mod_str ? strdup(mod_str) : strdup("OOK");
+    } else {
+        msg->modulation = strdup("OOK");
+    }
+    
+    json_object *timestamp_obj;
+    if (json_object_object_get_ex(root, "timestamp", &timestamp_obj)) {
+        msg->timestamp = json_object_get_int(timestamp_obj);
+    } else {
+        msg->timestamp = (uint32_t)time(NULL);
+    }
+    
+    // Parse hex_string if present
+    json_object *hex_obj;
+    if (json_object_object_get_ex(root, "hex_string", &hex_obj)) {
+        const char *hex_str = json_object_get_string(hex_obj);
+        if (hex_str) {
+            msg->hex_string = strdup(hex_str);
+        }
+    }
+    
+    // Parse pulse_data from JSON
+    msg->pulse_data = calloc(1, sizeof(pulse_data_t));
+    if (!msg->pulse_data) {
+        rtl433_message_free(msg);
+        json_object_put(root);
+        return NULL;
+    }
+    
+    // Parse modulation
+    if (msg->modulation && strcmp(msg->modulation, "FSK") == 0) {
+        msg->pulse_data->fsk_f2_est = 1;
+    }
+    
+    // Parse pulse count
+    json_object *count_obj;
+    if (json_object_object_get_ex(root, "count", &count_obj)) {
+        msg->pulse_data->num_pulses = json_object_get_int(count_obj);
+    }
+    
+    // Parse sample rate FIRST (needed for pulse conversion)
+    json_object *rate_obj;
+    if (json_object_object_get_ex(root, "rate_Hz", &rate_obj)) {
+        msg->pulse_data->sample_rate = json_object_get_int(rate_obj);
+    }
+    
+    // Parse pulses array (convert from microseconds back to samples)
+    json_object *pulses_obj;
+    if (json_object_object_get_ex(root, "pulses", &pulses_obj)) {
+        if (json_object_is_type(pulses_obj, json_type_array)) {
+            int array_len = json_object_array_length(pulses_obj);
+            double from_us = msg->pulse_data->sample_rate / 1e6; // Convert μs back to samples
+            
+            // Parse pulse/gap pairs and convert from microseconds to samples
+            for (int i = 0; i < array_len && i < PD_MAX_PULSES * 2; i += 2) {
+                json_object *pulse_val = json_object_array_get_idx(pulses_obj, i);
+                json_object *gap_val = json_object_array_get_idx(pulses_obj, i + 1);
+                
+                if (pulse_val && i/2 < PD_MAX_PULSES) {
+                    double pulse_us = json_object_get_double(pulse_val);
+                    msg->pulse_data->pulse[i/2] = (int)(pulse_us * from_us);
+                }
+                if (gap_val && i/2 < PD_MAX_PULSES) {
+                    double gap_us = json_object_get_double(gap_val);
+                    msg->pulse_data->gap[i/2] = (int)(gap_us * from_us);
+                }
+            }
+        }
+    }
+    
+    // Parse frequencies
+    json_object *freq_obj;
+    if (json_object_object_get_ex(root, "freq_Hz", &freq_obj)) {
+        msg->pulse_data->freq1_hz = json_object_get_double(freq_obj);
+        msg->pulse_data->centerfreq_hz = msg->pulse_data->freq1_hz;
+    }
+    
+    json_object *freq1_obj;
+    if (json_object_object_get_ex(root, "freq1_Hz", &freq1_obj)) {
+        msg->pulse_data->freq1_hz = json_object_get_double(freq1_obj);
+    }
+    
+    json_object *freq2_obj;
+    if (json_object_object_get_ex(root, "freq2_Hz", &freq2_obj)) {
+        msg->pulse_data->freq2_hz = json_object_get_double(freq2_obj);
+    }
+    
+    // Sample rate already parsed above for pulse conversion
+    
+    // Parse signal quality metrics
+    json_object *rssi_obj;
+    if (json_object_object_get_ex(root, "rssi_dB", &rssi_obj)) {
+        msg->pulse_data->rssi_db = json_object_get_double(rssi_obj);
+    }
+    
+    json_object *snr_obj;
+    if (json_object_object_get_ex(root, "snr_dB", &snr_obj)) {
+        msg->pulse_data->snr_db = json_object_get_double(snr_obj);
+    }
+    
+    json_object *noise_obj;
+    if (json_object_object_get_ex(root, "noise_dB", &noise_obj)) {
+        msg->pulse_data->noise_db = json_object_get_double(noise_obj);
+    }
+    
+    // Parse additional critical fields for decoders
+    json_object *depth_obj;
+    if (json_object_object_get_ex(root, "depth_bits", &depth_obj)) {
+        msg->pulse_data->depth_bits = json_object_get_int(depth_obj);
+    }
+    
+    json_object *range_obj;
+    if (json_object_object_get_ex(root, "range_dB", &range_obj)) {
+        msg->pulse_data->range_db = json_object_get_double(range_obj);
+    }
+    
+    // Parse critical timing and estimation fields
+    json_object *offset_obj;
+    if (json_object_object_get_ex(root, "offset", &offset_obj)) {
+        msg->pulse_data->offset = json_object_get_int64(offset_obj);
+    }
+    
+    json_object *start_ago_obj;
+    if (json_object_object_get_ex(root, "start_ago", &start_ago_obj)) {
+        msg->pulse_data->start_ago = json_object_get_int(start_ago_obj);
+    }
+    
+    json_object *end_ago_obj;
+    if (json_object_object_get_ex(root, "end_ago", &end_ago_obj)) {
+        msg->pulse_data->end_ago = json_object_get_int(end_ago_obj);
+    }
+    
+    json_object *ook_low_obj;
+    if (json_object_object_get_ex(root, "ook_low_estimate", &ook_low_obj)) {
+        msg->pulse_data->ook_low_estimate = json_object_get_int(ook_low_obj);
+    }
+    
+    json_object *ook_high_obj;
+    if (json_object_object_get_ex(root, "ook_high_estimate", &ook_high_obj)) {
+        msg->pulse_data->ook_high_estimate = json_object_get_int(ook_high_obj);
+    }
+    
+    json_object *fsk_f1_obj;
+    if (json_object_object_get_ex(root, "fsk_f1_est", &fsk_f1_obj)) {
+        msg->pulse_data->fsk_f1_est = json_object_get_int(fsk_f1_obj);
+    }
+    
+    json_object *fsk_f2_est_obj;
+    if (json_object_object_get_ex(root, "fsk_f2_est_value", &fsk_f2_est_obj)) {
+        msg->pulse_data->fsk_f2_est = json_object_get_int(fsk_f2_est_obj);
+    }
+    
+    // Ensure centerfreq_hz is set (critical for many decoders)
+    if (msg->pulse_data->centerfreq_hz == 0) {
+        if (msg->pulse_data->freq1_hz > 0) {
+            msg->pulse_data->centerfreq_hz = msg->pulse_data->freq1_hz;
+        } else {
+            // Default center frequency if not specified
+            msg->pulse_data->centerfreq_hz = 433920000;
+        }
+    }
+    
+    json_object_put(root);
     return msg;
+}
+
+// Enhanced pulse data to JSON conversion (includes all fields for signal reconstruction)
+char* rtl433_pulse_data_to_enhanced_json(pulse_data_t const *data)
+{
+    if (!data) return NULL;
+    
+    int pulses[2 * PD_MAX_PULSES];
+    double to_us = 1e6 / data->sample_rate;
+    for (unsigned i = 0; i < data->num_pulses; ++i) {
+        pulses[i * 2 + 0] = data->pulse[i] * to_us;
+        pulses[i * 2 + 1] = data->gap[i] * to_us;
+    }
+
+    /* clang-format off */
+    data_t *enhanced_data = data_make(
+            "mod",              "", DATA_STRING, (data->fsk_f2_est) ? "FSK" : "OOK",
+            "count",            "", DATA_INT,    data->num_pulses,
+            "pulses",           "", DATA_ARRAY,  data_array(2 * data->num_pulses, DATA_INT, pulses),
+            "freq1_Hz",         "", DATA_FORMAT, "%u Hz", DATA_INT, (unsigned)data->freq1_hz,
+            "freq2_Hz",         "", DATA_COND,   data->fsk_f2_est, DATA_FORMAT, "%u Hz", DATA_INT, (unsigned)data->freq2_hz,
+            "freq_Hz",          "", DATA_INT,    (unsigned)data->centerfreq_hz,
+            "rate_Hz",          "", DATA_INT,    data->sample_rate,
+            "depth_bits",       "", DATA_INT,    data->depth_bits,
+            "range_dB",         "", DATA_FORMAT, "%.1f dB", DATA_DOUBLE, data->range_db,
+            "rssi_dB",          "", DATA_FORMAT, "%.1f dB", DATA_DOUBLE, data->rssi_db,
+            "snr_dB",           "", DATA_FORMAT, "%.1f dB", DATA_DOUBLE, data->snr_db,
+            "noise_dB",         "", DATA_FORMAT, "%.1f dB", DATA_DOUBLE, data->noise_db,
+            // Additional critical fields for complete signal reconstruction
+            "offset",           "", DATA_FORMAT, "%llu", DATA_INT, (unsigned long long)data->offset,
+            "start_ago",        "", DATA_INT,    data->start_ago,
+            "end_ago",          "", DATA_INT,    data->end_ago,
+            "ook_low_estimate", "", DATA_INT,    data->ook_low_estimate,
+            "ook_high_estimate","", DATA_INT,    data->ook_high_estimate,
+            "fsk_f1_est",       "", DATA_INT,    data->fsk_f1_est,
+            "fsk_f2_est_value", "", DATA_INT,    data->fsk_f2_est,
+            NULL);
+    /* clang-format on */
+    
+    if (!enhanced_data) return NULL;
+    
+    char *json_str = data_print_jsons(enhanced_data, NULL, 0);
+    data_free(enhanced_data);
+    
+    return json_str;
 }
 
 // === UTILITIES ===

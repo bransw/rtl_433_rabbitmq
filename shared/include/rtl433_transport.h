@@ -107,6 +107,9 @@ rtl433_message_t* rtl433_message_create_from_json(const char *json_str);
 /// Сериализация сообщения в JSON
 char* rtl433_message_to_json(rtl433_message_t *message);
 
+/// Enhanced pulse data to JSON conversion (includes all fields for signal reconstruction)
+char* rtl433_pulse_data_to_enhanced_json(pulse_data_t const *data);
+
 /// Освобождение сообщения
 void rtl433_message_free(rtl433_message_t *message);
 

@@ -147,6 +147,19 @@ static void R_API_CALLCONV print_rabbitmq_data(data_output_t *output, data_t *da
             
         } else if (data_mod) {
             // This is raw pulse data - send to 'signals' queue
+            // Try to use enhanced JSON if we have pulse_data structure available
+            pulse_data_t *pulse_data = NULL;
+            
+            // Look for pulse_data in the data chain
+            for (data_t *d = data; d; d = d->next) {
+                if (!strcmp(d->key, "pulses") && d->value && d->type == DATA_ARRAY) {
+                    // This appears to be pulse data, but we need the actual pulse_data_t structure
+                    // For now, fall back to standard JSON
+                    break;
+                }
+            }
+            
+            // For now, use standard JSON until we can properly extract pulse_data_t
             data_print_jsons(data, json_buffer, sizeof(json_buffer));
             target_queue = rabbitmq->signals_queue;
             print_logf(LOG_DEBUG, "RabbitMQ", "Sending raw pulse data to 'signals': %.100s...", json_buffer);

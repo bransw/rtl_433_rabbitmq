@@ -54,6 +54,7 @@
 #include "fatal.h"
 #include "write_sigrok.h"
 #include "mongoose.h"
+#include "rtl433_input.h"
 
 #ifdef _WIN32
 #include <io.h>
@@ -71,6 +72,65 @@
 #else
 #include "getopt/getopt.h"
 #endif
+
+// RabbitMQ input support
+static char *g_rabbitmq_input_url = NULL;
+
+// RabbitMQ input processing function
+static void rabbitmq_pulse_handler(pulse_data_t *pulse_data, void *user_data) {
+    r_cfg_t *cfg = (r_cfg_t*)user_data;
+    
+    if (!pulse_data || !cfg) {
+        return;
+    }
+    
+    fprintf(stderr, "📊 RabbitMQ: Processing pulse data: %d pulses\n", pulse_data->num_pulses);
+    fprintf(stderr, "    Freq1: %.0f Hz, Freq2: %.0f Hz, Center: %.0f Hz\n", 
+            pulse_data->freq1_hz, pulse_data->freq2_hz, pulse_data->centerfreq_hz);
+    fprintf(stderr, "    FSK flag: %d, Sample rate: %u, Depth: %u bits\n", 
+            pulse_data->fsk_f2_est, pulse_data->sample_rate, pulse_data->depth_bits);
+    fprintf(stderr, "    RSSI: %.1f dB, SNR: %.1f dB, Noise: %.1f dB\n", 
+            pulse_data->rssi_db, pulse_data->snr_db, pulse_data->noise_db);
+    fprintf(stderr, "    OOK estimates: [%d,%d], FSK estimates: [%d,%d]\n", 
+            pulse_data->ook_low_estimate, pulse_data->ook_high_estimate,
+            pulse_data->fsk_f1_est, pulse_data->fsk_f2_est);
+    fprintf(stderr, "    Timing: offset=%llu, start_ago=%u, end_ago=%u\n",
+            (unsigned long long)pulse_data->offset, pulse_data->start_ago, pulse_data->end_ago);
+    fprintf(stderr, "    First 4 pulses (samples): [%d,%d,%d,%d]\n", 
+            pulse_data->num_pulses > 0 ? pulse_data->pulse[0] : -1,
+            pulse_data->num_pulses > 1 ? pulse_data->pulse[1] : -1,
+            pulse_data->num_pulses > 2 ? pulse_data->pulse[2] : -1,
+            pulse_data->num_pulses > 3 ? pulse_data->pulse[3] : -1);
+    fprintf(stderr, "    First 4 gaps (samples): [%d,%d,%d,%d]\n", 
+            pulse_data->num_pulses > 0 ? pulse_data->gap[0] : -1,
+            pulse_data->num_pulses > 1 ? pulse_data->gap[1] : -1,
+            pulse_data->num_pulses > 2 ? pulse_data->gap[2] : -1,
+            pulse_data->num_pulses > 3 ? pulse_data->gap[3] : -1);
+    
+    // Process pulse data through rtl_433 decoders
+    int events = 0;
+    
+    // Check if this is FSK signal (FSK if both freq1 and freq2 are present and different)
+    if (pulse_data->freq1_hz > 0 && pulse_data->freq2_hz > 0 && 
+        pulse_data->freq1_hz != pulse_data->freq2_hz) {
+        fprintf(stderr, "🔧 Trying FSK decoding (Freq1: %.0f, Freq2: %.0f)...\n", 
+                pulse_data->freq1_hz, pulse_data->freq2_hz);
+        events = run_fsk_demods(&cfg->demod->r_devs, pulse_data);
+        if (events > 0) {
+            fprintf(stderr, "🎯 FSK decoding found %d device(s)!\n", events);
+        } else {
+            fprintf(stderr, "❌ FSK decoding found 0 devices\n");
+        }
+    } else {
+        fprintf(stderr, "🔧 Trying OOK decoding (single freq: %.0f)...\n", pulse_data->freq1_hz);
+        events = run_ook_demods(&cfg->demod->r_devs, pulse_data);
+        if (events > 0) {
+            fprintf(stderr, "🎯 OOK decoding found %d device(s)!\n", events);
+        } else {
+            fprintf(stderr, "❌ OOK decoding found 0 devices\n");
+        }
+    }
+}
 
 // note that Clang has _Noreturn but it's C11
 // #if defined(__clang__) ...
@@ -1042,8 +1102,19 @@ static void parse_conf_option(r_cfg_t *cfg, int opt, char *arg)
         if (!arg)
             help_read();
 
-        add_infile(cfg, arg);
-        // TODO: file_info_check_read()
+        // Check if this is RabbitMQ URL
+        if (strncmp(arg, "rabbitmq://", 11) == 0 || strncmp(arg, "amqp://", 7) == 0) {
+            // Store RabbitMQ input URL
+            if (g_rabbitmq_input_url) {
+                free(g_rabbitmq_input_url);
+            }
+            g_rabbitmq_input_url = strdup(arg);
+            fprintf(stderr, "🐰 RabbitMQ input configured: %s\n", arg);
+        } else {
+            // Regular file input
+            add_infile(cfg, arg);
+            // TODO: file_info_check_read()
+        }
         break;
     case 'w':
         if (!arg)
@@ -2080,6 +2151,38 @@ int main(int argc, char **argv) {
     // TODO: remove this before next release
     print_log(LOG_NOTICE, "Input", "The internals of input handling changed, read about and report problems on PR #1978");
 
+    // Check for RabbitMQ input BEFORE starting SDR
+    if (g_rabbitmq_input_url) {
+        fprintf(stderr, "🐰 Starting RabbitMQ input processing from: %s\n", g_rabbitmq_input_url);
+        
+        // Initialize RabbitMQ input
+        rtl433_input_config_t input_config;
+        
+        if (rtl433_input_init_from_url(&input_config, g_rabbitmq_input_url, 
+                                       rabbitmq_pulse_handler, cfg) != 0) {
+            fprintf(stderr, "❌ Failed to initialize RabbitMQ input from URL: %s\n", g_rabbitmq_input_url);
+            return -1;
+        }
+        
+        fprintf(stderr, "✅ RabbitMQ input initialized, waiting for signals...\n");
+        fprintf(stderr, "   Press Ctrl+C to stop\n\n");
+        
+        // Start reading messages in a loop
+        while (!cfg->exit_async) {
+            int messages_received = rtl433_input_read_message(&input_config, 5000); // 5 second timeout
+            
+            if (messages_received < 0) {
+                fprintf(stderr, "❌ Error reading from RabbitMQ\n");
+                break;
+            }
+        }
+        
+        fprintf(stderr, "🛑 Stopping RabbitMQ input processing\n");
+        rtl433_input_cleanup(&input_config);
+        return 0;
+    }
+
+    // Normal SDR processing when no RabbitMQ input
     if (cfg->dev_mode != DEVICE_MODE_MANUAL) {
         r = start_sdr(cfg);
         if (r < 0) {
@@ -2124,6 +2227,13 @@ int main(int argc, char **argv) {
 
     if (cfg->exit_code >= 0)
         r = cfg->exit_code;
+    
+    // Clean up RabbitMQ input URL
+    if (g_rabbitmq_input_url) {
+        free(g_rabbitmq_input_url);
+        g_rabbitmq_input_url = NULL;
+    }
+    
     r_free_cfg(cfg);
 
     return r >= 0 ? r : -r;
