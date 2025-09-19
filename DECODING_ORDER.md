@@ -6,126 +6,101 @@ In our `rtl_433_client`, **device decoding is called BEFORE `pulse_analyzer`**.
 
 `pulse_analyzer` is used **only as a fallback** for debugging when no devices were decoded.
 
-## 📊 **COMPLETE SIGNAL PROCESSING FLOW:**
-
-### **🔄 DUAL MODE OPERATION:**
+## 📊 **UNIFIED SIGNAL PROCESSING FLOW:**
 
 ```
 ┌─────────────────────────────────────────────────────────────────────────────┐
-│                            CLIENT MODE (Signal Producer)                    │
+│                        INPUT SOURCES (Multiple Options)                     │
 └─────────────────────────────────────────────────────────────────────────────┘
 
-┌──────────────────────┐
-│   SDR/File Samples   │ (IQ data from file/device)
-└─────────┬────────────┘
-          │
-          ▼
-┌─────────────────┐
-│  AM/FM Convert  │ (Baseband conversion)
-└─────────┬───────┘
-          │
-          ▼
-┌─────────────────┐
-│ Pulse Detection │ (pulse_detect_package)
-└─────────┬───────┘
-          │
-    ┌─────┴─────┐
-    │           │
-    ▼           ▼
-┌─────────┐ ┌─────────┐
-│OOK Data │ │FSK Data │ (pulse_data_t structures)
-└────┬────┘ └────┬────┘
-     │           │
-     ▼           ▼
-┌─────────────────┐
-│  Send Raw Data  │ ← 📤 Enhanced JSON + hex_string
-└─────────────────┘     (Send to RabbitMQ 'signals' queue)
-     │
-     ▼
-┌─────────────────┐
-│ Device Decoding │ ← 🔍 run_ook_demods() / run_fsk_demods()
-└─────────┬───────┘
-          │
-    ┌─────┴─────┐
-    │           │
-    ▼           ▼
-┌─────────┐ ┌─────────┐
-│SUCCESS  │ │ FAILED  │
-│Decoded  │ │No Match │
-└────┬────┘ └────┬────┘
-     │           │
-     ▼           ▼
-┌─────────────────┐ ┌─────────────────┐
-│Send Device Data │ │ pulse_analyzer  │ ← 🔬 Debug only
-└─────────────────┘ └─────────────────┘   (When verbosity >= DEBUG)
-     │
-     ▼
-📤 client_data_acquired_handler()
-   (Send to RabbitMQ 'detected' queue)
-
+    ┌──────────────────┐    ┌──────────────────┐    ┌──────────────────┐
+    │   SDR Device     │    │    File Input    │    │  RabbitMQ Input  │
+    │   (-d rtlsdr)    │    │ (-r file.cu8)    │    │(-r rabbitmq://...)│
+    └─────────┬────────┘    └─────────┬────────┘    └─────────┬────────┘
+              │                       │                       │
+              └───────────┬───────────┘                       │
+                          │                                   │
+                          ▼                                   ▼
+                ┌─────────────────┐                 ┌─────────────────┐
+                │  AM/FM Convert  │                 │ Read JSON from  │
+                │(Baseband conv.) │                 │ 'signals' Queue │
+                └─────────┬───────┘                 └─────────┬───────┘
+                          │                                   │
+                          ▼                                   ▼
+                ┌─────────────────┐                 ┌─────────────────┐
+                │ Pulse Detection │                 │Signal Reconstru-│
+                │(pulse_detect_*) │                 │ction from JSON │
+                └─────────┬───────┘                 └─────────┬───────┘
+                          │                                   │
+                          └───────────┬───────────────────────┘
+                                      │
+                                ┌─────┴─────┐
+                                │           │
+                                ▼           ▼
+                        ┌─────────┐ ┌─────────┐
+                        │OOK Data │ │FSK Data │ (pulse_data_t structures)
+                        └────┬────┘ └────┬────┘
+                             │           │
+                             └─────┬─────┘
+                                   │
+                                   ▼
+                        ┌─────────────────┐
+                        │ Device Decoding │ ← 🔍 run_ook_demods() / run_fsk_demods()
+                        └─────────┬───────┘     (488 registered decoders)
+                                  │
+                            ┌─────┴─────┐
+                            │           │
+                            ▼           ▼
+                        ┌─────────┐ ┌─────────┐
+                        │SUCCESS  │ │ FAILED  │
+                        │Decoded  │ │No Match │
+                        └────┬────┘ └────┬────┘
+                             │           │
+                             ▼           ▼
+                        ┌─────────────────┐ ┌─────────────────┐
+                        │ OUTPUT ROUTING  │ │ pulse_analyzer  │ ← 🔬 Debug only
+                        └─────────┬───────┘ └─────────────────┘   (When verbosity >= DEBUG)
+                                  │
+                    ┌─────────────┼─────────────┐
+                    │             │             │
+                    ▼             ▼             ▼
 
 ┌─────────────────────────────────────────────────────────────────────────────┐
-│                           SERVER MODE (Signal Consumer)                     │
+│                     OUTPUT OPTIONS (Multiple Destinations)                  │
 └─────────────────────────────────────────────────────────────────────────────┘
 
-📥 RabbitMQ Input Handler
-   (-r rabbitmq://guest:guest@localhost:5672/signals)
-     │
+   📤 Console JSON         📤 RabbitMQ Output      📤 File Output        📤 MQTT Output
+   (-F json)               (-F rabbitmq://...)     (-F file://...)       (-F mqtt://...)
+        │                         │                      │                     │
+        ▼                         ▼                      ▼                     ▼
+   ┌─────────┐            ┌─────────────────┐    ┌─────────────────┐   ┌─────────────────┐
+   │ stdout  │            │ Raw Signals     │    │ JSON to Files   │   │ MQTT Broker     │
+   │ output  │            │ → 'signals'     │    │ (decoded data)  │   │ (external sys)  │
+   └─────────┘            │ Detected Devs   │    └─────────────────┘   └─────────────────┘
+                          │ → 'detected'    │
+                          └─────────────────┘
+                                    │
+                              ┌─────┴─────┐
+                              │ Enhanced  │
+                              │JSON with  │
+                              │hex_string │
+                              │+ metadata │
+                              └───────────┘
+
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                        🔄 DISTRIBUTED PROCESSING                            │
+└─────────────────────────────────────────────────────────────────────────────┘
+
+CLIENT INSTANCE                 RabbitMQ                 SERVER INSTANCE(S)
+     │                                                         │
+     ▼                                                         ▼
+File/SDR → Enhanced JSON  ────→ 'signals' Queue  ────→ JSON → Reconstruction
+     │                                                         │
+     ▼                                                         ▼
+Local Decoding           ────→ 'detected' Queue ←──── Remote Decoding Results
+     │                                                    (Scalable processing)
      ▼
-┌─────────────────┐
-│ Read JSON from  │ ← 📨 rabbitmq_pulse_handler()
-│ 'signals' Queue │     (Get enhanced JSON with hex_string)
-└─────────┬───────┘
-          │
-          ▼
-┌─────────────────┐
-│Signal Reconstru-│ ← 🔧 rtl433_rfraw_reconstruct_from_json()
-│ction from JSON  │     (Parse hex_string → pulse_data_t)
-└─────────┬───────┘
-          │
-          ▼
-┌─────────┐ ┌─────────┐
-│OOK Data │ │FSK Data │ (Reconstructed pulse_data_t)
-└────┬────┘ └────┬────┘
-     │           │
-     ▼           ▼
-┌─────────────────┐
-│ Device Decoding │ ← 🔍 run_ook_demods() / run_fsk_demods()
-└─────────┬───────┘     (488 registered decoders)
-          │
-    ┌─────┴─────┐
-    │           │
-    ▼           ▼
-┌─────────┐ ┌─────────┐
-│SUCCESS  │ │ FAILED  │
-│Decoded  │ │No Match │
-└────┬────┘ └────┬────┘
-     │           │
-     ▼           ▼
-📊 Statistics    📊 Statistics
-   Update           Update
-     │               │
-     ▼               ▼
-┌─────────────────┐ ┌─────────────────┐
-│ 🎯 Toyota TPMS  │ │ ❌ Unknown      │
-│ Found & Output  │ │ Signal Pattern  │
-└─────────────────┘ └─────────────────┘
-```
-
-### **🔄 MESSAGE FLOW BETWEEN MODES:**
-
-```
-CLIENT MODE                  RabbitMQ                SERVER MODE
-    │                                                    │
-    ▼                                                    ▼
-📤 Enhanced JSON     ──────→ 'signals' Queue  ──────→ 📥 JSON Input
-   + hex_string                                          │
-   + pulse metadata                                      ▼
-                                                    🔧 Reconstruction
-                                                         │
-                                                         ▼
-📤 Device JSON       ──────→ 'detected' Queue ←──────📊 Decoded Results
-   (Toyota TPMS)                                   (if successful)
+📊 Statistics Display
 ```
 
 ## 📋 **DETAILED EXECUTION ORDER:**
@@ -207,20 +182,29 @@ if (ook_events > 0) {
 
 ## ⚡ **KEY TAKEAWAYS:**
 
-### **📡 ORIGINAL ARCHITECTURE:**
-- **Performance**: Decoding goes first for fast recognition
-- **Debugging**: `pulse_analyzer` is "plan B" for unknown signals  
-- **Architecture**: Separation of "fast decoding" vs "deep analysis"
+### **🎯 UNIFIED ARCHITECTURE BENEFITS:**
+- **Multiple Input Sources**: SDR devices, Files, RabbitMQ queues - all use same processing pipeline
+- **Multiple Output Options**: Console, RabbitMQ, Files, MQTT - flexible data routing  
+- **Performance**: Decoding goes first for fast recognition across all input types
+- **Scalability**: Distributed processing via RabbitMQ for high-throughput scenarios
 
-### **🔄 NEW RABBITMQ ARCHITECTURE:**
-- **CLIENT Mode**: File/SDR → Enhanced JSON → RabbitMQ → External processing
-- **SERVER Mode**: RabbitMQ → Signal reconstruction → Local decoding → Results
-- **Enhanced JSON**: Complete signal metadata + hex_string for reconstruction
-- **Dual Statistics**: Both modes track processed/decoded signals independently
-- **Signal Reconstruction**: Full `pulse_data_t` restoration from compact hex format
+### **🔄 PROCESSING FLOW:**
+1. **Input Normalization**: All sources converge to `pulse_data_t` structures
+2. **Universal Decoding**: Same 488 decoders work on any input source
+3. **Flexible Output**: Route results to any combination of destinations
+4. **Debug Fallback**: `pulse_analyzer` available for unknown signals regardless of input
 
-### **🎯 EXECUTION ORDER:**
-- **CLIENT**: SDR/File → pulse_data → Enhanced JSON → RabbitMQ → Local decoding
-- **SERVER**: RabbitMQ → JSON parsing → pulse_data reconstruction → Decoding (488 decoders)
+### **🎯 DISTRIBUTED PROCESSING:**
+- **Horizontal Scaling**: Multiple SERVER instances can process from same RabbitMQ
+- **Load Balancing**: Queue-based distribution automatically balances workload
+- **Enhanced JSON**: Complete signal metadata enables perfect reconstruction
+- **Statistics Tracking**: Real-time monitoring across distributed instances
 
-**So: DECODING → pulse_analyzer (only on failure and debug) + RabbitMQ distributed processing** 🎯
+### **📊 EXECUTION ORDER (All Modes):**
+```
+INPUT → pulse_data_t → DECODING (488 decoders) → OUTPUT ROUTING
+                           │
+                           └→ pulse_analyzer (debug fallback)
+```
+
+**Universal principle: DECODING FIRST → debug analysis only on failure** 🎯
