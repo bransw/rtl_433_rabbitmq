@@ -14,6 +14,7 @@
 #include "rfraw.h"
 #include "r_util.h"
 #include "fatal.h"
+#include "rtl433_override.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -214,15 +215,26 @@ void pulse_data_dump(FILE *file, pulse_data_t const *data)
 
 data_t *pulse_data_print_data(pulse_data_t const *data)
 {
+    // Check if there's an override function set (for enhanced JSON with hex_string)
+    pulse_data_print_func_t override_func = rtl433_get_pulse_data_print_override();
+    if (override_func) {
+        return override_func(data);
+    }
+    
+    // Standard implementation with signal ID
+    static int signal_id = 0;
+    signal_id++;
+    
     int pulses[2 * PD_MAX_PULSES];
     double to_us = 1e6 / data->sample_rate;
     for (unsigned i = 0; i < data->num_pulses; ++i) {
         pulses[i * 2 + 0] = data->pulse[i] * to_us;
         pulses[i * 2 + 1] = data->gap[i] * to_us;
     }
-
+    
     /* clang-format off */
     return data_make(
+            "signal_id",        "", DATA_INT,    signal_id,
             "mod",              "", DATA_STRING, (data->fsk_f2_est) ? "FSK" : "OOK",
             "count",            "", DATA_INT,    data->num_pulses,
             "pulses",           "", DATA_ARRAY,  data_array(2 * data->num_pulses, DATA_INT, pulses),
@@ -235,6 +247,14 @@ data_t *pulse_data_print_data(pulse_data_t const *data)
             "rssi_dB",          "", DATA_FORMAT, "%.1f dB", DATA_DOUBLE, data->rssi_db,
             "snr_dB",           "", DATA_FORMAT, "%.1f dB", DATA_DOUBLE, data->snr_db,
             "noise_dB",         "", DATA_FORMAT, "%.1f dB", DATA_DOUBLE, data->noise_db,
+            // Additional critical fields for complete signal reconstruction
+            "offset",           "", DATA_FORMAT, "%llu", DATA_INT, (unsigned long long)data->offset,
+            "start_ago",        "", DATA_INT,    data->start_ago,
+            "end_ago",          "", DATA_INT,    data->end_ago,
+            "ook_low_estimate", "", DATA_INT,    data->ook_low_estimate,
+            "ook_high_estimate","", DATA_INT,    data->ook_high_estimate,
+            "fsk_f1_est",       "", DATA_INT,    data->fsk_f1_est,
+            "fsk_f2_est_value", "", DATA_INT,    data->fsk_f2_est,
             NULL);
     /* clang-format on */
 }

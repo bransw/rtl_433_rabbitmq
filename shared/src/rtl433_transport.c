@@ -3,6 +3,7 @@
  */
 
 #include "rtl433_transport.h"
+#include "rtl433_rfraw.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -18,6 +19,7 @@
 
 /// Global transport statistics
 static rtl433_transport_stats_t g_transport_stats = {0};
+
 
 /// Unique ID generator
 static uint64_t g_next_package_id = 1;
@@ -557,7 +559,10 @@ static int rtl433_transport_rabbitmq_receive(rtl433_transport_connection_t *conn
                                              void *user_data, 
                                              int timeout_ms)
 {
-    if (!conn->connection_data) return -1;
+    if (!conn->connection_data) {
+        fprintf(stderr, "🔴 RabbitMQ receive: No connection data\n");
+        return -1;
+    }
     
     rabbitmq_connection_data_t *rabbitmq = (rabbitmq_connection_data_t*)conn->connection_data;
     
@@ -576,9 +581,9 @@ static int rtl433_transport_rabbitmq_receive(rtl433_transport_connection_t *conn
         
         // Начинаем consuming (одно сообщение за раз)
         amqp_basic_consume_ok_t *consume_ok = amqp_basic_consume(rabbitmq->conn, rabbitmq->channel,
-                          amqp_cstring_bytes(conn->config->queue),
-                          amqp_empty_bytes, // consumer tag (auto-generated)
-                          0, 1, 0, amqp_empty_table); // no_local, no_ack, exclusive
+                              amqp_cstring_bytes(conn->config->queue),
+                              amqp_empty_bytes, // consumer tag (auto-generated)
+                              0, 1, 0, amqp_empty_table); // no_local, no_ack, exclusive
         
         reply = amqp_get_rpc_reply(rabbitmq->conn);
         if (reply.reply_type != AMQP_RESPONSE_NORMAL) {
@@ -602,7 +607,6 @@ static int rtl433_transport_rabbitmq_receive(rtl433_transport_connection_t *conn
     // Получение сообщения
     amqp_envelope_t envelope;
     amqp_rpc_reply_t reply = amqp_consume_message(rabbitmq->conn, &envelope, &timeout, 0);
-    
     
     if (reply.reply_type == AMQP_RESPONSE_NORMAL) {
         // Парсинг сообщения
@@ -851,46 +855,8 @@ rtl433_message_t* rtl433_message_create_from_json(const char *json_str)
 // Enhanced pulse data to JSON conversion (includes all fields for signal reconstruction)
 char* rtl433_pulse_data_to_enhanced_json(pulse_data_t const *data)
 {
-    if (!data) return NULL;
-    
-    int pulses[2 * PD_MAX_PULSES];
-    double to_us = 1e6 / data->sample_rate;
-    for (unsigned i = 0; i < data->num_pulses; ++i) {
-        pulses[i * 2 + 0] = data->pulse[i] * to_us;
-        pulses[i * 2 + 1] = data->gap[i] * to_us;
-    }
-
-    /* clang-format off */
-    data_t *enhanced_data = data_make(
-            "mod",              "", DATA_STRING, (data->fsk_f2_est) ? "FSK" : "OOK",
-            "count",            "", DATA_INT,    data->num_pulses,
-            "pulses",           "", DATA_ARRAY,  data_array(2 * data->num_pulses, DATA_INT, pulses),
-            "freq1_Hz",         "", DATA_FORMAT, "%u Hz", DATA_INT, (unsigned)data->freq1_hz,
-            "freq2_Hz",         "", DATA_COND,   data->fsk_f2_est, DATA_FORMAT, "%u Hz", DATA_INT, (unsigned)data->freq2_hz,
-            "freq_Hz",          "", DATA_INT,    (unsigned)data->centerfreq_hz,
-            "rate_Hz",          "", DATA_INT,    data->sample_rate,
-            "depth_bits",       "", DATA_INT,    data->depth_bits,
-            "range_dB",         "", DATA_FORMAT, "%.1f dB", DATA_DOUBLE, data->range_db,
-            "rssi_dB",          "", DATA_FORMAT, "%.1f dB", DATA_DOUBLE, data->rssi_db,
-            "snr_dB",           "", DATA_FORMAT, "%.1f dB", DATA_DOUBLE, data->snr_db,
-            "noise_dB",         "", DATA_FORMAT, "%.1f dB", DATA_DOUBLE, data->noise_db,
-            // Additional critical fields for complete signal reconstruction
-            "offset",           "", DATA_FORMAT, "%llu", DATA_INT, (unsigned long long)data->offset,
-            "start_ago",        "", DATA_INT,    data->start_ago,
-            "end_ago",          "", DATA_INT,    data->end_ago,
-            "ook_low_estimate", "", DATA_INT,    data->ook_low_estimate,
-            "ook_high_estimate","", DATA_INT,    data->ook_high_estimate,
-            "fsk_f1_est",       "", DATA_INT,    data->fsk_f1_est,
-            "fsk_f2_est_value", "", DATA_INT,    data->fsk_f2_est,
-            NULL);
-    /* clang-format on */
-    
-    if (!enhanced_data) return NULL;
-    
-    char *json_str = data_print_jsons(enhanced_data, NULL, 0);
-    data_free(enhanced_data);
-    
-    return json_str;
+    // Delegate to the dedicated RFRAW module
+    return rtl433_rfraw_pulse_data_to_enhanced_json(data);
 }
 
 // === UTILITIES ===

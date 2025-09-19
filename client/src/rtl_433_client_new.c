@@ -74,7 +74,21 @@
 #endif
 
 // RabbitMQ input support
+#include "rtl433_input.h"
+#include "rtl433_pulse_enhanced.h"
+#include "rtl433_override.h"
+#include "rtl433_rfraw.h"
 static char *g_rabbitmq_input_url = NULL;
+
+// Statistics for signal processing (both client and server modes)
+static struct {
+    int total_received;
+    int total_sent;
+    int successfully_reconstructed;
+    int successfully_decoded;
+    int reconstruction_failed;
+    int decoding_failed;
+} signal_stats = {0};
 
 // RabbitMQ input processing function
 static void rabbitmq_pulse_handler(pulse_data_t *pulse_data, void *user_data) {
@@ -84,7 +98,23 @@ static void rabbitmq_pulse_handler(pulse_data_t *pulse_data, void *user_data) {
         return;
     }
     
-    fprintf(stderr, "📊 RabbitMQ: Processing pulse data: %d pulses\n", pulse_data->num_pulses);
+    signal_stats.total_received++;
+    fprintf(stderr, "📊 RabbitMQ: Processing pulse data: %d pulses [Signal #%d]\n", 
+            pulse_data->num_pulses, signal_stats.total_received);
+    
+    // 🧪 SIMPLE RECONSTRUCTION TEST
+    fprintf(stderr, "🧪 Quick reconstruction test...\n");
+    
+    // Quick hex_string test only
+    char *hex_string = rtl433_rfraw_generate_hex_string(pulse_data);
+    if (hex_string) {
+        fprintf(stderr, "✅ Hex: %.20s...\n", hex_string);
+        signal_stats.successfully_reconstructed++;
+        free(hex_string);
+    } else {
+        fprintf(stderr, "⚠️ No hex (complex)\n");
+        signal_stats.reconstruction_failed++;
+    }
     fprintf(stderr, "    Freq1: %.0f Hz, Freq2: %.0f Hz, Center: %.0f Hz\n", 
             pulse_data->freq1_hz, pulse_data->freq2_hz, pulse_data->centerfreq_hz);
     fprintf(stderr, "    FSK flag: %d, Sample rate: %u, Depth: %u bits\n", 
@@ -96,6 +126,17 @@ static void rabbitmq_pulse_handler(pulse_data_t *pulse_data, void *user_data) {
             pulse_data->fsk_f1_est, pulse_data->fsk_f2_est);
     fprintf(stderr, "    Timing: offset=%llu, start_ago=%u, end_ago=%u\n",
             (unsigned long long)pulse_data->offset, pulse_data->start_ago, pulse_data->end_ago);
+    
+    // CRITICAL: Show precise timing data for Toyota TPMS diagnosis
+    double to_us = 1e6 / pulse_data->sample_rate;
+    fprintf(stderr, "    🎯 TOYOTA DIAGNOSTIC - First 8 pulse timings (microseconds):\n");
+    for (int i = 0; i < 8 && i < pulse_data->num_pulses; i++) {
+        double pulse_us = pulse_data->pulse[i] * to_us;
+        double gap_us = pulse_data->gap[i] * to_us;
+        fprintf(stderr, "      [%d] pulse=%.2f μs (%d samples), gap=%.2f μs (%d samples)\n", 
+                i, pulse_us, pulse_data->pulse[i], gap_us, pulse_data->gap[i]);
+    }
+    
     fprintf(stderr, "    First 4 pulses (samples): [%d,%d,%d,%d]\n", 
             pulse_data->num_pulses > 0 ? pulse_data->pulse[0] : -1,
             pulse_data->num_pulses > 1 ? pulse_data->pulse[1] : -1,
@@ -106,6 +147,13 @@ static void rabbitmq_pulse_handler(pulse_data_t *pulse_data, void *user_data) {
             pulse_data->num_pulses > 1 ? pulse_data->gap[1] : -1,
             pulse_data->num_pulses > 2 ? pulse_data->gap[2] : -1,
             pulse_data->num_pulses > 3 ? pulse_data->gap[3] : -1);
+    
+    // 🔧 ENSURE BITBUFFER IS PROPERLY INITIALIZED
+    // Many decoders require bitbuffer to be generated from pulse data
+    fprintf(stderr, "🔧 Pre-processing pulse data for decoders...\n");
+    
+    // 🔧 CRITICAL: The decoders work directly with pulse_data_t
+    // No manual bitbuffer generation needed - decoders handle this internally
     
     // Process pulse data through rtl_433 decoders
     int events = 0;
@@ -118,18 +166,26 @@ static void rabbitmq_pulse_handler(pulse_data_t *pulse_data, void *user_data) {
         events = run_fsk_demods(&cfg->demod->r_devs, pulse_data);
         if (events > 0) {
             fprintf(stderr, "🎯 FSK decoding found %d device(s)!\n", events);
+            signal_stats.successfully_decoded++;
         } else {
             fprintf(stderr, "❌ FSK decoding found 0 devices\n");
+            signal_stats.decoding_failed++;
         }
     } else {
         fprintf(stderr, "🔧 Trying OOK decoding (single freq: %.0f)...\n", pulse_data->freq1_hz);
         events = run_ook_demods(&cfg->demod->r_devs, pulse_data);
         if (events > 0) {
             fprintf(stderr, "🎯 OOK decoding found %d device(s)!\n", events);
+            signal_stats.successfully_decoded++;
         } else {
             fprintf(stderr, "❌ OOK decoding found 0 devices\n");
+            signal_stats.decoding_failed++;
         }
     }
+    
+    // Print running statistics
+    fprintf(stderr, "📈 Running Stats: RX=%d, Reconstructed=%d, Decoded=%d\n", 
+            signal_stats.total_received, signal_stats.successfully_reconstructed, signal_stats.successfully_decoded);
 }
 
 // note that Clang has _Noreturn but it's C11
@@ -651,10 +707,20 @@ static void sdr_callback(unsigned char *iq_buf, uint32_t len, void *ctx)
                 }
 
                 if (cfg->verbosity >= LOG_TRACE) pulse_data_print(&demod->pulse_data);
+                
+                // Count all processed signals for statistics (OOK)
+                signal_stats.total_sent++;
+                
                 if (cfg->raw_mode == 1 || (cfg->raw_mode == 2 && p_events == 0) || (cfg->raw_mode == 3 && p_events > 0)) {
                     data_t *data = pulse_data_print_data(&demod->pulse_data);
                     event_occurred_handler(cfg, data);
                 }
+                
+                // Count decoded devices in client mode (OOK)
+                if (p_events > 0) {
+                    signal_stats.successfully_decoded++;
+                }
+                // Note: Failed count added only once per signal at FSK section
                 if (demod->analyze_pulses && (cfg->grab_mode <= 1 || (cfg->grab_mode == 2 && p_events == 0) || (cfg->grab_mode == 3 && p_events > 0)) ) {
                     r_device device = {.log_fn = log_device_handler, .output_ctx = cfg};
                     pulse_analyzer(&demod->pulse_data, package_type, &device);
@@ -678,9 +744,24 @@ static void sdr_callback(unsigned char *iq_buf, uint32_t len, void *ctx)
                 }
 
                 if (cfg->verbosity >= LOG_TRACE) pulse_data_print(&demod->fsk_pulse_data);
+                
+                // Count all processed signals for statistics (FSK) - but don't double count
+                // signal_stats.total_sent++; // This was already counted in OOK section
+                
                 if (cfg->raw_mode == 1 || (cfg->raw_mode == 2 && p_events == 0) || (cfg->raw_mode == 3 && p_events > 0)) {
                     data_t *data = pulse_data_print_data(&demod->fsk_pulse_data);
                     event_occurred_handler(cfg, data);
+                }
+                
+                // Count decoded devices in client mode (FSK)
+                if (p_events > 0) {
+                    signal_stats.successfully_decoded++;
+                } else {
+                    // Count failed decoding only if OOK also failed (no double counting)
+                    if (signal_stats.successfully_decoded == 0 || 
+                        signal_stats.successfully_decoded < signal_stats.total_sent) {
+                        signal_stats.decoding_failed++;
+                    }
                 }
                 if (demod->analyze_pulses && (cfg->grab_mode <= 1 || (cfg->grab_mode == 2 && p_events == 0) || (cfg->grab_mode == 3 && p_events > 0))) {
                     r_device device = {.log_fn = log_device_handler, .output_ctx = cfg};
@@ -1718,6 +1799,9 @@ int main(int argc, char **argv) {
 
     r_init_cfg(cfg);
     
+    // Re-enable enhanced pulse data printing with NULL-safe handling
+    rtl433_set_pulse_data_print_override(rtl433_pulse_data_print_data_enhanced);
+    
     // Enable raw pulse data output for RabbitMQ 'signals' queue
     // We'll enable raw_mode later, after parsing command line options
     // to check if RabbitMQ output is requested
@@ -2122,6 +2206,23 @@ int main(int argc, char **argv) {
         close_dumpers(cfg);
         free(test_mode_buf);
         free(test_mode_float_buf);
+        
+        // Print final statistics for client mode before exit
+        if (signal_stats.total_sent > 0 || signal_stats.successfully_decoded > 0) {
+            fprintf(stderr, "\n📈 FINAL CLIENT PROCESSING STATISTICS:\n");
+            fprintf(stderr, "┌─────────────────────────────────────┐\n");
+            fprintf(stderr, "│ Total signals sent:            %3d │\n", signal_stats.total_sent);
+            fprintf(stderr, "│ Successfully decoded:          %3d │\n", signal_stats.successfully_decoded);
+            fprintf(stderr, "│ Decoding failed:               %3d │\n", signal_stats.decoding_failed);
+            fprintf(stderr, "└─────────────────────────────────────┘\n");
+            
+            if (signal_stats.total_sent > 0) {
+                double decoding_rate = (double)signal_stats.successfully_decoded / (signal_stats.successfully_decoded + signal_stats.decoding_failed) * 100.0;
+                fprintf(stderr, "📊 DECODING SUCCESS RATE: %.1f%%\n", decoding_rate);
+            }
+            fprintf(stderr, "\n");
+        }
+        
         r_free_cfg(cfg);
         exit(0);
     }
@@ -2153,6 +2254,11 @@ int main(int argc, char **argv) {
 
     // Check for RabbitMQ input BEFORE starting SDR
     if (g_rabbitmq_input_url) {
+        // register default decoders ONLY for RabbitMQ input mode
+        if (!cfg->no_default_devices) {
+            register_all_protocols(cfg, 0); // register all defaults
+            fprintf(stderr, "🔧 Registered %zu default decoders for RabbitMQ input\n", cfg->demod->r_devs.len);
+        }
         fprintf(stderr, "🐰 Starting RabbitMQ input processing from: %s\n", g_rabbitmq_input_url);
         
         // Initialize RabbitMQ input
@@ -2167,19 +2273,45 @@ int main(int argc, char **argv) {
         fprintf(stderr, "✅ RabbitMQ input initialized, waiting for signals...\n");
         fprintf(stderr, "   Press Ctrl+C to stop\n\n");
         
-        // Start reading messages in a loop
+        // Start reading messages in a loop (similar to SDR mode)
         while (!cfg->exit_async) {
-            int messages_received = rtl433_input_read_message(&input_config, 5000); // 5 second timeout
+            int messages_received = rtl433_input_read_message(&input_config, 1000); // 1 second timeout
             
             if (messages_received < 0) {
-                fprintf(stderr, "❌ Error reading from RabbitMQ\n");
-                break;
+                fprintf(stderr, "❌ Connection error, trying to reconnect...\n");
+                sleep(2); // Wait before retry
+                continue;
+            }
+            
+            // No timeout error for no messages - just continue loop like SDR
+            if (messages_received == 0) {
+                // No messages - this is normal, just continue
+                continue; 
             }
         }
         
         fprintf(stderr, "🛑 Stopping RabbitMQ input processing\n");
+        
+        // Print final statistics
+        fprintf(stderr, "\n📈 FINAL SIGNAL PROCESSING STATISTICS:\n");
+        fprintf(stderr, "┌─────────────────────────────────────┐\n");
+        fprintf(stderr, "│ Total signals received:        %3d │\n", signal_stats.total_received);
+        fprintf(stderr, "│ Successfully reconstructed:    %3d │\n", signal_stats.successfully_reconstructed);
+        fprintf(stderr, "│ Reconstruction failed:         %3d │\n", signal_stats.reconstruction_failed);
+        fprintf(stderr, "│ Successfully decoded:          %3d │\n", signal_stats.successfully_decoded);
+        fprintf(stderr, "│ Decoding failed:               %3d │\n", signal_stats.decoding_failed);
+        fprintf(stderr, "└─────────────────────────────────────┘\n");
+        
+        if (signal_stats.total_received > 0) {
+            double reconstruction_rate = (double)signal_stats.successfully_reconstructed / signal_stats.total_received * 100.0;
+            double decoding_rate = (double)signal_stats.successfully_decoded / signal_stats.total_received * 100.0;
+            fprintf(stderr, "📊 RECONSTRUCTION SUCCESS RATE: %.1f%%\n", reconstruction_rate);
+            fprintf(stderr, "📊 DECODING SUCCESS RATE: %.1f%%\n", decoding_rate);
+        }
+        fprintf(stderr, "\n");
+        
         rtl433_input_cleanup(&input_config);
-        return 0;
+        // Continue to final cleanup instead of early return
     }
 
     // Normal SDR processing when no RabbitMQ input
@@ -2234,6 +2366,27 @@ int main(int argc, char **argv) {
         g_rabbitmq_input_url = NULL;
     }
     
+    // Print final statistics for client mode
+    fprintf(stderr, "🔧 DEBUG: Statistics check - total_sent: %d, decoded: %d, failed: %d\n", 
+            signal_stats.total_sent, signal_stats.successfully_decoded, signal_stats.decoding_failed);
+    
+    if (signal_stats.total_sent > 0 || signal_stats.successfully_decoded > 0) {
+        fprintf(stderr, "\n📈 FINAL CLIENT PROCESSING STATISTICS:\n");
+        fprintf(stderr, "┌─────────────────────────────────────┐\n");
+        fprintf(stderr, "│ Total signals sent:            %3d │\n", signal_stats.total_sent);
+        fprintf(stderr, "│ Successfully decoded:          %3d │\n", signal_stats.successfully_decoded);
+        fprintf(stderr, "│ Decoding failed:               %3d │\n", signal_stats.decoding_failed);
+        fprintf(stderr, "└─────────────────────────────────────┘\n");
+        
+        if (signal_stats.total_sent > 0) {
+            double decoding_rate = (double)signal_stats.successfully_decoded / (signal_stats.successfully_decoded + signal_stats.decoding_failed) * 100.0;
+            fprintf(stderr, "📊 DECODING SUCCESS RATE: %.1f%%\n", decoding_rate);
+        }
+        fprintf(stderr, "\n");
+    } else {
+        fprintf(stderr, "🔧 DEBUG: No statistics to show - no signals processed\n");
+    }
+
     r_free_cfg(cfg);
 
     return r >= 0 ? r : -r;

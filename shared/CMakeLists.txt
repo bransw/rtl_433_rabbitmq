@@ -42,6 +42,9 @@ set(SHARED_SOURCES
     src/rtl433_signal.c
     src/rtl433_config.c
     src/rtl433_input.c
+    src/rtl433_rfraw.c
+    src/rtl433_pulse_enhanced.c
+    src/rtl433_override.c
 )
 
 # Создание статической библиотеки
@@ -61,7 +64,7 @@ target_compile_options(rtl433_shared PRIVATE ${JSON_CFLAGS_OTHER})
 
 # Установка публичных заголовков
 set_target_properties(rtl433_shared PROPERTIES
-    PUBLIC_HEADER "include/rtl433_transport.h;include/rtl433_signal.h;include/rtl433_config.h;include/rtl433_input.h"
+    PUBLIC_HEADER "include/rtl433_transport.h;include/rtl433_signal.h;include/rtl433_config.h;include/rtl433_input.h;include/rtl433_rfraw.h;include/rtl433_pulse_enhanced.h;include/rtl433_override.h"
 )
 
 # Экспорт переменных для использования в родительском CMake

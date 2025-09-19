@@ -66,3 +66,4 @@ pulse_data_t* rtl433_input_message_to_pulse_data(rtl433_message_t *message);
 
 #endif // RTL433_INPUT_H
 
+
