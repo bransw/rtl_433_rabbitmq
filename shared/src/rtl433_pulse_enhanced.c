@@ -21,9 +21,6 @@ data_t *rtl433_pulse_data_print_data_enhanced(pulse_data_t const *data)
 {
     if (!data) return NULL;
     
-    static int msg_id = 0;
-    msg_id++;
-    
     int pulses[2 * PD_MAX_PULSES];
     double to_us = 1e6 / data->sample_rate;
     for (unsigned i = 0; i < data->num_pulses; ++i) {
@@ -41,7 +38,6 @@ data_t *rtl433_pulse_data_print_data_enhanced(pulse_data_t const *data)
 
     /* clang-format off */
     data_t *enhanced_data = data_make(
-            "msg_id",           "", DATA_INT,    msg_id,
             "mod",              "", DATA_STRING, (data->fsk_f2_est) ? "FSK" : "OOK",
             "count",            "", DATA_INT,    data->num_pulses,
             "pulses",           "", DATA_ARRAY,  data_array(2 * data->num_pulses, DATA_INT, pulses),

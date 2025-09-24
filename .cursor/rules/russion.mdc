@@ -1,0 +1,5 @@
+---
+description: The user prefers code comments in English rather than Russian.
+globs:
+alwaysApply: true
+---

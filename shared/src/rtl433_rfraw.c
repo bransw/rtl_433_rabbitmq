@@ -117,7 +117,9 @@ static int histogram_find_bin_index(histogram_t const *hist, int width)
 
 #define HEXSTR_BUILDER_SIZE 1024
 #define HEXSTR_MAX_COUNT 32
+#ifndef USHRT_MAX
 #define USHRT_MAX 65535
+#endif
 
 /// Hex string builder
 typedef struct hexstr {
@@ -371,6 +373,7 @@ int rtl433_rfraw_parse_hex_string(const char *hex_string, pulse_data_t *pulse_da
     // Parse modulation info (BB) 
     char mod_str[3] = {hex_string[2], hex_string[3], '\0'};
     unsigned int mod_info = strtoul(mod_str, NULL, 16);
+    (void)mod_info; // Mark as used to avoid warning
     
     // Extract timing info from modulation byte
     pulse_data->sample_rate = 250000; // Default sample rate
@@ -378,6 +381,7 @@ int rtl433_rfraw_parse_hex_string(const char *hex_string, pulse_data_t *pulse_da
     // Parse length (CC)
     char len_str[3] = {hex_string[4], hex_string[5], '\0'};
     unsigned int payload_len = strtoul(len_str, NULL, 16);
+    (void)payload_len; // Mark as used to avoid warning
     
     // Parse timing histogram count (DD)
     char timing_count_str[3] = {hex_string[6], hex_string[7], '\0'};

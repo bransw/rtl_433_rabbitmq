@@ -81,8 +81,6 @@ void add_kv_output(struct r_cfg *cfg, char *param);
 
 void add_mqtt_output(struct r_cfg *cfg, char *param);
 
-void add_rabbitmq_output(struct r_cfg *cfg, char *param);
-
 void add_influx_output(struct r_cfg *cfg, char *param);
 
 void add_syslog_output(struct r_cfg *cfg, char *param);

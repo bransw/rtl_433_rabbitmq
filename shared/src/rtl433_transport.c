@@ -186,20 +186,8 @@ static int rtl433_transport_rabbitmq_connect(rtl433_transport_connection_t *conn
         return -1;
     }
     
-    // Объявление exchange
-    amqp_exchange_declare(rabbitmq->conn, rabbitmq->channel,
-                         amqp_cstring_bytes(conn->config->exchange),
-                         amqp_cstring_bytes("direct"),
-                         0, 1, 0, 0, amqp_empty_table);
-    
-    // Проверка результата объявления exchange
-    reply = amqp_get_rpc_reply(rabbitmq->conn);
-    if (reply.reply_type != AMQP_RESPONSE_NORMAL) {
-        amqp_connection_close(rabbitmq->conn, AMQP_REPLY_SUCCESS);
-        amqp_destroy_connection(rabbitmq->conn);
-        free(rabbitmq);
-        return -1;
-    }
+    // Exchange should be pre-configured externally
+    // No automatic exchange creation - use existing RabbitMQ configuration
     
     // Note: Queues are now created on-demand by rtl433_transport_send_message_to_queue()
     
@@ -421,16 +409,8 @@ static int rtl433_transport_rabbitmq_send_to_queue(rtl433_transport_connection_t
     
     rabbitmq_connection_data_t *rabbitmq = (rabbitmq_connection_data_t*)conn->connection_data;
     
-    // Ensure the queue exists and is bound
-    amqp_queue_declare(rabbitmq->conn, rabbitmq->channel,
-                      amqp_cstring_bytes(queue_name),
-                      0, 1, 0, 0, amqp_empty_table);
-    
-    amqp_queue_bind(rabbitmq->conn, rabbitmq->channel,
-                   amqp_cstring_bytes(queue_name),
-                   amqp_cstring_bytes(conn->config->exchange),
-                   amqp_cstring_bytes(queue_name), // routing key = queue name
-                   amqp_empty_table);
+    // Note: Queue and bindings should be pre-configured externally
+    // No automatic queue/binding creation - use existing RabbitMQ configuration
     
     char *json_str = rtl433_message_to_json(message);
     if (!json_str) return -1;
@@ -478,30 +458,8 @@ static int rtl433_transport_rabbitmq_send_raw_to_queue(rtl433_transport_connecti
     
     rabbitmq_connection_data_t *rabbitmq = (rabbitmq_connection_data_t*)conn->connection_data;
     
-    // Ensure the queue exists and is bound
-    amqp_queue_declare(rabbitmq->conn, rabbitmq->channel,
-                      amqp_cstring_bytes(queue_name),
-                      0, 1, 0, 0, amqp_empty_table);
-    
-    // Check queue declaration result
-    amqp_rpc_reply_t reply = amqp_get_rpc_reply(rabbitmq->conn);
-    if (reply.reply_type != AMQP_RESPONSE_NORMAL) {
-        g_transport_stats.send_errors++;
-        return -1;
-    }
-    
-    amqp_queue_bind(rabbitmq->conn, rabbitmq->channel,
-                   amqp_cstring_bytes(queue_name),
-                   amqp_cstring_bytes(conn->config->exchange),
-                   amqp_cstring_bytes(queue_name), // routing key = queue name
-                   amqp_empty_table);
-    
-    // Check queue bind result
-    reply = amqp_get_rpc_reply(rabbitmq->conn);
-    if (reply.reply_type != AMQP_RESPONSE_NORMAL) {
-        g_transport_stats.send_errors++;
-        return -1;
-    }
+    // Note: Queue and bindings should be pre-configured externally
+    // No automatic queue/binding creation - use existing RabbitMQ configuration
     
     amqp_basic_properties_t props;
     props._flags = AMQP_BASIC_CONTENT_TYPE_FLAG | AMQP_BASIC_DELIVERY_MODE_FLAG;
@@ -568,16 +526,8 @@ static int rtl433_transport_rabbitmq_receive(rtl433_transport_connection_t *conn
     
     // Set up consumer only once
     if (!rabbitmq->consumer_active) {
-        // Объявляем очередь для чтения
-        amqp_queue_declare(rabbitmq->conn, rabbitmq->channel,
-                          amqp_cstring_bytes(conn->config->queue),
-                          0, 1, 0, 0, amqp_empty_table);
-        
-        amqp_rpc_reply_t reply = amqp_get_rpc_reply(rabbitmq->conn);
-        if (reply.reply_type != AMQP_RESPONSE_NORMAL) {
-            g_transport_stats.receive_errors++;
-            return -1;
-        }
+        // Note: Queue should be pre-configured externally
+        // No automatic queue creation - use existing RabbitMQ configuration
         
         // Начинаем consuming (одно сообщение за раз)
         amqp_basic_consume_ok_t *consume_ok = amqp_basic_consume(rabbitmq->conn, rabbitmq->channel,
@@ -585,7 +535,7 @@ static int rtl433_transport_rabbitmq_receive(rtl433_transport_connection_t *conn
                               amqp_empty_bytes, // consumer tag (auto-generated)
                               0, 1, 0, amqp_empty_table); // no_local, no_ack, exclusive
         
-        reply = amqp_get_rpc_reply(rabbitmq->conn);
+        amqp_rpc_reply_t reply = amqp_get_rpc_reply(rabbitmq->conn);
         if (reply.reply_type != AMQP_RESPONSE_NORMAL) {
             g_transport_stats.receive_errors++;
             return -1;

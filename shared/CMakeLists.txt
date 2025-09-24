@@ -45,6 +45,9 @@ set(SHARED_SOURCES
     src/rtl433_rfraw.c
     src/rtl433_pulse_enhanced.c
     src/rtl433_override.c
+    src/output_rabbitmq.c
+    src/rtl433_signal_format.c
+    src/rtl433_api_wrappers.c
 )
 
 # Создание статической библиотеки

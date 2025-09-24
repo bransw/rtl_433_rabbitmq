@@ -29,3 +29,7 @@ cmake-build-debug/
 # File manager files
 .DS_Store
 .history
+tests/signals/*
+
+
+
