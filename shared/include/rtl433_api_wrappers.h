@@ -35,11 +35,6 @@ int run_ook_demods_ex(list_t *r_devs, pulse_data_t *pulse_data);
  */
 int run_fsk_demods_ex(list_t *r_devs, pulse_data_t *fsk_pulse_data);
 
-/**
- * @brief Prepare devices to add msg_id to their output data
- * @param r_devs List of devices to prepare
- */
-void rtl433_prepare_devices_for_msg_id(list_t *r_devs);
 
 #ifdef __cplusplus
 }

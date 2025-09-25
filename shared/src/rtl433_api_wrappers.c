@@ -82,13 +82,3 @@ int run_fsk_demods_ex(list_t *r_devs, pulse_data_t *fsk_pulse_data)
     return result;
 }
 
-/**
- * Simplified device preparation - no longer needed for time-based correlation
- * 
- * @param r_devs List of devices (kept for API compatibility)
- */
-void rtl433_prepare_devices_for_msg_id(list_t *r_devs)
-{
-    // No longer needed: using time-based correlation instead of msg_id patching
-    (void)r_devs; // Suppress unused parameter warning
-}

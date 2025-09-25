@@ -636,7 +636,7 @@ static void sdr_callback(unsigned char *iq_buf, uint32_t len, void *ctx)
                 calc_rssi_snr(cfg, &demod->pulse_data);
                 if (demod->analyze_pulses) fprintf(stderr, "Detected OOK package\t%s\n", time_pos_str(cfg, demod->pulse_data.start_ago, time_str));
 
-                p_events += run_ook_demods(&demod->r_devs, &demod->pulse_data);
+                p_events += run_ook_demods_ex(&demod->r_devs, &demod->pulse_data);
                 cfg->total_frames_ook += 1;
                 cfg->total_frames_events += p_events > 0;
                 cfg->frames_ook +=1;
@@ -673,7 +673,7 @@ static void sdr_callback(unsigned char *iq_buf, uint32_t len, void *ctx)
                 calc_rssi_snr(cfg, &demod->fsk_pulse_data);
                 if (demod->analyze_pulses) fprintf(stderr, "Detected FSK package\t%s\n", time_pos_str(cfg, demod->fsk_pulse_data.start_ago, time_str));
 
-                p_events += run_fsk_demods(&demod->r_devs, &demod->fsk_pulse_data);
+                p_events += run_fsk_demods_ex(&demod->r_devs, &demod->fsk_pulse_data);
                 cfg->total_frames_fsk +=1;
                 cfg->total_frames_events += p_events > 0;
                 cfg->frames_fsk += 1;
@@ -1933,9 +1933,9 @@ int main(int argc, char **argv) {
                     list_t single_dev = {0};
                     list_push(&single_dev, r_dev);
                     if (!pulse_data.fsk_f2_est)
-                        r += run_ook_demods(&single_dev, &pulse_data);
+                        r += run_ook_demods_ex(&single_dev, &pulse_data);
                     else
-                        r += run_fsk_demods(&single_dev, &pulse_data);
+                        r += run_fsk_demods_ex(&single_dev, &pulse_data);
                     list_free_elems(&single_dev, NULL);
                 } else
                 r += pulse_slicer_string(e, r_dev);
@@ -1946,9 +1946,9 @@ int main(int argc, char **argv) {
                 pulse_data_t pulse_data = {0};
                 rfraw_parse(&pulse_data, line);
                 if (!pulse_data.fsk_f2_est)
-                    r += run_ook_demods(&demod->r_devs, &pulse_data);
+                    r += run_ook_demods_ex(&demod->r_devs, &pulse_data);
                 else
-                    r += run_fsk_demods(&demod->r_devs, &pulse_data);
+                    r += run_fsk_demods_ex(&demod->r_devs, &pulse_data);
             } else
             for (void **iter = demod->r_devs.elems; iter && *iter; ++iter) {
                 r_device *r_dev = *iter;
@@ -1972,9 +1972,9 @@ int main(int argc, char **argv) {
             pulse_data_t pulse_data = {0};
             rfraw_parse(&pulse_data, cfg->test_data);
             if (!pulse_data.fsk_f2_est)
-                r += run_ook_demods(&demod->r_devs, &pulse_data);
+                r += run_ook_demods_ex(&demod->r_devs, &pulse_data);
             else
-                r += run_fsk_demods(&demod->r_devs, &pulse_data);
+                r += run_fsk_demods_ex(&demod->r_devs, &pulse_data);
         } else
         for (void **iter = demod->r_devs.elems; iter && *iter; ++iter) {
             r_device *r_dev = *iter;
@@ -2060,10 +2060,10 @@ int main(int argc, char **argv) {
                     }
 
                     if (demod->pulse_data.fsk_f2_est) {
-                        run_fsk_demods(&demod->r_devs, &demod->pulse_data);
+                        run_fsk_demods_ex(&demod->r_devs, &demod->pulse_data);
                     }
                     else {
-                        int p_events = run_ook_demods(&demod->r_devs, &demod->pulse_data);
+                        int p_events = run_ook_demods_ex(&demod->r_devs, &demod->pulse_data);
                         if (cfg->verbosity >= LOG_DEBUG)
                             pulse_data_print(&demod->pulse_data);
                         if (demod->analyze_pulses && (cfg->grab_mode <= 1 || (cfg->grab_mode == 2 && p_events == 0) || (cfg->grab_mode == 3 && p_events > 0))) {
