@@ -121,6 +121,32 @@ void rtl433_asn1_free_buffer(rtl433_asn1_buffer_t *buffer);
 void rtl433_asn1_free_message(void *message, int message_type);
 
 /**
+ * @brief Decode ASN.1 signal message and reconstruct pulse_data
+ * 
+ * @param buffer ASN.1 encoded signal message
+ * @param buffer_size Size of the encoded data
+ * @param pulse_data Output: reconstructed pulse_data_t structure
+ * @return RTL433_ASN1_OK if successful, error code otherwise
+ */
+rtl433_asn1_result_t rtl433_asn1_decode_signal_to_pulse_data(
+    const uint8_t *buffer,
+    size_t buffer_size,
+    void *pulse_data  // pulse_data_t* - avoiding header dependency
+);
+
+/**
+ * @brief Encode pulse_data_t to ASN.1 signal message
+ * 
+ * @param pulse_data Input pulse_data_t structure
+ * @param package_id Message package identifier
+ * @return Encoded ASN.1 buffer (caller must free buffer)
+ */
+rtl433_asn1_buffer_t rtl433_asn1_encode_pulse_data_to_signal(
+    const void *pulse_data,  // pulse_data_t* - avoiding header dependency
+    uint32_t package_id
+);
+
+/**
  * @brief Get ASN.1 library version information
  * 
  * @return Version string
