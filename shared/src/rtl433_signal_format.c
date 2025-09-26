@@ -344,69 +344,6 @@ int rtl433_send_bitbuffer_to_rabbitmq(bitbuffer_t const *bitbuffer, pulse_data_t
     return 0;
 }
 
-int rtl433_send_pulse_data_to_rabbitmq(pulse_data_t const *pulse_data)
-{
-    if (!pulse_data || pulse_data->num_pulses == 0) return -1;
-    
-    // Only send if RabbitMQ output is configured
-    if (!rtl433_has_rabbitmq_output()) {
-        return 0; // Silently skip if RabbitMQ not configured
-    }
-    
-    // Create JSON data with ORIGINAL pulse_data
-    data_t *data = data_make(
-        "format", "", DATA_STRING, "pulse_data_original",
-        "num_pulses", "", DATA_INT, pulse_data->num_pulses,
-        "frequency", "", DATA_DOUBLE, pulse_data->freq1_hz,
-        "rssi_db", "", DATA_DOUBLE, pulse_data->rssi_db,
-        "sample_rate", "", DATA_INT, (int)pulse_data->sample_rate,
-        "modulation", "", DATA_STRING, pulse_data->fsk_f2_est ? "FSK" : "OOK",
-        NULL);
-    
-    if (!data) {
-        fprintf(stderr, "❌ RabbitMQ: Failed to create pulse_data JSON\n");
-        return -1;
-    }
-    
-    // Add pulse timings array
-    data_t **pulse_array = malloc(pulse_data->num_pulses * sizeof(data_t*));
-    if (pulse_array) {
-        for (unsigned i = 0; i < pulse_data->num_pulses; i++) {
-            pulse_array[i] = data_int(NULL, "", "", NULL, pulse_data->pulse[i]);
-        }
-        data = data_ary(data, "pulse_timings", "", NULL, 
-                          data_array(pulse_data->num_pulses, DATA_DATA, pulse_array));
-        free(pulse_array);
-    }
-    
-    // Add gap timings array  
-    data_t **gap_array = malloc(pulse_data->num_pulses * sizeof(data_t*));
-    if (gap_array) {
-        for (unsigned i = 0; i < pulse_data->num_pulses; i++) {
-            gap_array[i] = data_int(NULL, "", "", NULL, pulse_data->gap[i]);
-        }
-        data = data_ary(data, "gap_timings", "", NULL, 
-                          data_array(pulse_data->num_pulses, DATA_DATA, gap_array));
-        free(gap_array);
-    }
-    
-    // Try to generate hex_string for compatibility
-    char *hex_string = rtl433_rfraw_generate_hex_string(pulse_data);
-    if (hex_string) {
-        data = data_str(data, "hex_string", "", NULL, hex_string);
-        free(hex_string);
-    }
-    
-    fprintf(stderr, "📤 RabbitMQ: Sending ORIGINAL signal (%u pulses, %.0f Hz)\n", 
-            pulse_data->num_pulses, pulse_data->freq1_hz);
-    
-    // Send through existing RabbitMQ output system
-    // Data will be sent through normal data output pipeline
-    data_free(data);
-    
-    fprintf(stderr, "✅ RabbitMQ: ORIGINAL signal sent successfully\n");
-    return 0;
-}
 
 void rtl433_print_signal_data(pulse_data_t const *pulse_data, bitbuffer_t const *bitbuffer) {
     rtl433_print_signal_data_with_hex(pulse_data, bitbuffer, NULL);

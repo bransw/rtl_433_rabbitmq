@@ -1,0 +1,234 @@
+# Makefile for RTL433 RabbitMQ ASN.1 Protocol
+# Compiles ASN.1 schema and generates C code
+
+# ASN.1 compiler
+ASN1C = asn1c
+ASN1C_FLAGS = -fcompound-names -fincludes-quoted -fskeletons-copy
+
+# Source files
+ASN1_SCHEMA = rtl433-rabbitmq.asn1
+ASN1_OUTPUT_DIR = asn1-generated
+
+# Generated files (main structures)
+ASN1_SOURCES = \
+	$(ASN1_OUTPUT_DIR)/RTL433Message.c \
+	$(ASN1_OUTPUT_DIR)/SignalMessage.c \
+	$(ASN1_OUTPUT_DIR)/DetectedMessage.c \
+	$(ASN1_OUTPUT_DIR)/StatusMessage.c \
+	$(ASN1_OUTPUT_DIR)/ConfigMessage.c \
+	$(ASN1_OUTPUT_DIR)/SignalData.c \
+	$(ASN1_OUTPUT_DIR)/PulsesData.c \
+	$(ASN1_OUTPUT_DIR)/ModulationType.c \
+	$(ASN1_OUTPUT_DIR)/RFParameters.c \
+	$(ASN1_OUTPUT_DIR)/SignalQuality.c \
+	$(ASN1_OUTPUT_DIR)/TimingInfo.c \
+	$(ASN1_OUTPUT_DIR)/DeviceInfo.c \
+	$(ASN1_OUTPUT_DIR)/DeviceData.c \
+	$(ASN1_OUTPUT_DIR)/DeviceDataField.c \
+	$(ASN1_OUTPUT_DIR)/DeviceFieldValue.c \
+	$(ASN1_OUTPUT_DIR)/DetectionMetadata.c
+
+ASN1_HEADERS = $(ASN1_SOURCES:.c=.h)
+
+# Support files
+ASN1_SUPPORT = \
+	$(ASN1_OUTPUT_DIR)/asn_application.c \
+	$(ASN1_OUTPUT_DIR)/asn_bit_data.c \
+	$(ASN1_OUTPUT_DIR)/asn_codecs_prim.c \
+	$(ASN1_OUTPUT_DIR)/asn_SEQUENCE_OF.c \
+	$(ASN1_OUTPUT_DIR)/asn_SET_OF.c \
+	$(ASN1_OUTPUT_DIR)/ber_decoder.c \
+	$(ASN1_OUTPUT_DIR)/ber_tlv_length.c \
+	$(ASN1_OUTPUT_DIR)/ber_tlv_tag.c \
+	$(ASN1_OUTPUT_DIR)/BIT_STRING.c \
+	$(ASN1_OUTPUT_DIR)/BOOLEAN.c \
+	$(ASN1_OUTPUT_DIR)/constr_CHOICE.c \
+	$(ASN1_OUTPUT_DIR)/constr_ENUMERATED.c \
+	$(ASN1_OUTPUT_DIR)/constr_SEQUENCE.c \
+	$(ASN1_OUTPUT_DIR)/constr_SEQUENCE_OF.c \
+	$(ASN1_OUTPUT_DIR)/constr_TYPE.c \
+	$(ASN1_OUTPUT_DIR)/der_encoder.c \
+	$(ASN1_OUTPUT_DIR)/ENUMERATED.c \
+	$(ASN1_OUTPUT_DIR)/GeneralizedTime.c \
+	$(ASN1_OUTPUT_DIR)/INTEGER.c \
+	$(ASN1_OUTPUT_DIR)/NativeEnumerated.c \
+	$(ASN1_OUTPUT_DIR)/NativeInteger.c \
+	$(ASN1_OUTPUT_DIR)/NativeReal.c \
+	$(ASN1_OUTPUT_DIR)/OCTET_STRING.c \
+	$(ASN1_OUTPUT_DIR)/per_decoder.c \
+	$(ASN1_OUTPUT_DIR)/per_encoder.c \
+	$(ASN1_OUTPUT_DIR)/per_opentype.c \
+	$(ASN1_OUTPUT_DIR)/per_support.c \
+	$(ASN1_OUTPUT_DIR)/REAL.c \
+	$(ASN1_OUTPUT_DIR)/UTF8String.c \
+	$(ASN1_OUTPUT_DIR)/xer_decoder.c \
+	$(ASN1_OUTPUT_DIR)/xer_encoder.c \
+	$(ASN1_OUTPUT_DIR)/xer_support.c
+
+# All generated files
+ASN1_ALL_SOURCES = $(ASN1_SOURCES) $(ASN1_SUPPORT)
+ASN1_ALL_HEADERS = $(ASN1_HEADERS) $(ASN1_SUPPORT:.c=.h)
+
+# Compiler settings
+CC = gcc
+CFLAGS = -Wall -Wextra -std=c99 -I$(ASN1_OUTPUT_DIR)
+LDFLAGS = -lm
+
+# Example programs
+EXAMPLES = \
+	example_signal_encoder \
+	example_signal_decoder \
+	example_detected_encoder \
+	example_detected_decoder \
+	asn1_to_json_converter \
+	json_to_asn1_converter
+
+# Test programs
+TESTS = \
+	test_signal_roundtrip \
+	test_detected_roundtrip \
+	test_performance_comparison
+
+.PHONY: all clean generate examples tests install check
+
+# Default target
+all: generate examples
+
+# Generate C code from ASN.1 schema
+generate: $(ASN1_OUTPUT_DIR)/.generated
+
+$(ASN1_OUTPUT_DIR)/.generated: $(ASN1_SCHEMA)
+	@echo "🔧 Generating C code from ASN.1 schema..."
+	@mkdir -p $(ASN1_OUTPUT_DIR)
+	$(ASN1C) $(ASN1_FLAGS) -D $(ASN1_OUTPUT_DIR) $(ASN1_SCHEMA)
+	@touch $(ASN1_OUTPUT_DIR)/.generated
+	@echo "✅ ASN.1 code generation complete"
+
+# Compile ASN.1 support library
+libasn1-rtl433.a: $(ASN1_ALL_SOURCES) $(ASN1_OUTPUT_DIR)/.generated
+	@echo "📦 Building ASN.1 support library..."
+	$(CC) $(CFLAGS) -c $(ASN1_ALL_SOURCES)
+	ar rcs $@ *.o
+	@rm -f *.o
+	@echo "✅ Library built: $@"
+
+# Example programs
+examples: $(EXAMPLES)
+
+example_signal_encoder: examples/signal_encoder.c libasn1-rtl433.a
+	$(CC) $(CFLAGS) -o $@ $< libasn1-rtl433.a $(LDFLAGS)
+
+example_signal_decoder: examples/signal_decoder.c libasn1-rtl433.a
+	$(CC) $(CFLAGS) -o $@ $< libasn1-rtl433.a $(LDFLAGS)
+
+example_detected_encoder: examples/detected_encoder.c libasn1-rtl433.a
+	$(CC) $(CFLAGS) -o $@ $< libasn1-rtl433.a $(LDFLAGS)
+
+example_detected_decoder: examples/detected_decoder.c libasn1-rtl433.a
+	$(CC) $(CFLAGS) -o $@ $< libasn1-rtl433.a $(LDFLAGS)
+
+asn1_to_json_converter: examples/asn1_to_json.c libasn1-rtl433.a
+	$(CC) $(CFLAGS) -o $@ $< libasn1-rtl433.a $(LDFLAGS) -ljson-c
+
+json_to_asn1_converter: examples/json_to_asn1.c libasn1-rtl433.a
+	$(CC) $(CFLAGS) -o $@ $< libasn1-rtl433.a $(LDFLAGS) -ljson-c
+
+# Test programs
+tests: $(TESTS)
+
+test_signal_roundtrip: tests/test_signal_roundtrip.c libasn1-rtl433.a
+	$(CC) $(CFLAGS) -o $@ $< libasn1-rtl433.a $(LDFLAGS)
+
+test_detected_roundtrip: tests/test_detected_roundtrip.c libasn1-rtl433.a
+	$(CC) $(CFLAGS) -o $@ $< libasn1-rtl433.a $(LDFLAGS)
+
+test_performance_comparison: tests/test_performance.c libasn1-rtl433.a
+	$(CC) $(CFLAGS) -o $@ $< libasn1-rtl433.a $(LDFLAGS) -ljson-c
+
+# Run tests
+check: tests
+	@echo "🧪 Running ASN.1 tests..."
+	./test_signal_roundtrip
+	./test_detected_roundtrip
+	./test_performance_comparison
+	@echo "✅ All tests passed"
+
+# Install headers and library
+install: libasn1-rtl433.a
+	@echo "📦 Installing ASN.1 library and headers..."
+	sudo mkdir -p /usr/local/include/rtl433-asn1
+	sudo cp $(ASN1_OUTPUT_DIR)/*.h /usr/local/include/rtl433-asn1/
+	sudo cp libasn1-rtl433.a /usr/local/lib/
+	sudo ldconfig
+	@echo "✅ Installation complete"
+
+# Create example directories
+examples tests:
+	@mkdir -p $@
+
+# Validate ASN.1 schema
+validate: $(ASN1_SCHEMA)
+	@echo "🔍 Validating ASN.1 schema..."
+	$(ASN1C) -E $(ASN1_SCHEMA)
+	@echo "✅ Schema validation passed"
+
+# Generate documentation
+docs: $(ASN1_SCHEMA)
+	@echo "📚 Generating ASN.1 documentation..."
+	@mkdir -p docs
+	asn1-doc-generator -o docs/asn1-structures.html $(ASN1_SCHEMA) || echo "⚠️  asn1-doc-generator not found, skipping docs"
+
+# Show statistics
+stats: $(ASN1_OUTPUT_DIR)/.generated
+	@echo "📊 ASN.1 Generation Statistics:"
+	@echo "  Schema file: $(ASN1_SCHEMA) ($(shell wc -l < $(ASN1_SCHEMA)) lines)"
+	@echo "  Generated C files: $(shell find $(ASN1_OUTPUT_DIR) -name '*.c' | wc -l)"
+	@echo "  Generated H files: $(shell find $(ASN1_OUTPUT_DIR) -name '*.h' | wc -l)"
+	@echo "  Total generated lines: $(shell find $(ASN1_OUTPUT_DIR) -name '*.c' -o -name '*.h' | xargs wc -l | tail -n1)"
+
+# Performance test
+perf-test: test_performance_comparison
+	@echo "⚡ Running performance comparison..."
+	./test_performance_comparison 1000
+	@echo "📊 Performance test complete"
+
+# Memory test
+memory-test: examples
+	@echo "🧠 Running memory leak tests..."
+	valgrind --leak-check=full --show-leak-kinds=all ./example_signal_encoder || echo "⚠️  valgrind not found"
+	valgrind --leak-check=full --show-leak-kinds=all ./example_signal_decoder || echo "⚠️  valgrind not found"
+
+# Clean generated files
+clean:
+	@echo "🧹 Cleaning generated files..."
+	rm -rf $(ASN1_OUTPUT_DIR)
+	rm -f libasn1-rtl433.a
+	rm -f $(EXAMPLES) $(TESTS)
+	rm -f *.o
+	rm -rf docs
+	@echo "✅ Clean complete"
+
+# Show help
+help:
+	@echo "RTL433 RabbitMQ ASN.1 Protocol Makefile"
+	@echo ""
+	@echo "Targets:"
+	@echo "  all           - Generate ASN.1 code and build examples"
+	@echo "  generate      - Generate C code from ASN.1 schema"
+	@echo "  examples      - Build example programs"
+	@echo "  tests         - Build test programs"
+	@echo "  check         - Run all tests"
+	@echo "  install       - Install library and headers"
+	@echo "  validate      - Validate ASN.1 schema"
+	@echo "  docs          - Generate documentation"
+	@echo "  stats         - Show generation statistics"
+	@echo "  perf-test     - Run performance tests"
+	@echo "  memory-test   - Run memory leak tests"
+	@echo "  clean         - Remove generated files"
+	@echo "  help          - Show this help"
+	@echo ""
+	@echo "Examples:"
+	@echo "  make generate          # Generate C code"
+	@echo "  make examples          # Build examples"
+	@echo "  make check             # Run tests"
+	@echo "  make install           # Install system-wide"

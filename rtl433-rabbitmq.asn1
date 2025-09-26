@@ -1,0 +1,228 @@
+-- RTL433 RabbitMQ Message Protocol
+-- ASN.1 Specification for efficient binary encoding
+-- Supports both hex_string and pulses data formats
+
+RTL433-RabbitMQ-Protocol DEFINITIONS AUTOMATIC TAGS ::= BEGIN
+
+-- Main message wrapper for all RTL433 RabbitMQ communications
+RTL433Message ::= CHOICE {
+    signalMessage       SignalMessage,
+    detectedMessage     DetectedMessage,
+    statusMessage       StatusMessage,
+    configMessage       ConfigMessage
+}
+
+-- SIGNALS Queue: Raw signal data for reconstruction
+SignalMessage ::= SEQUENCE {
+    -- Message identification
+    packageId           INTEGER (0..4294967295),    -- uint32
+    timestamp           GeneralizedTime OPTIONAL,
+    
+    -- Signal data (choose one format)
+    signalData          SignalData,
+    
+    -- RF parameters
+    modulation          ModulationType,
+    frequency           RFParameters,
+    
+    -- Signal quality metrics
+    signalQuality       SignalQuality OPTIONAL,
+    
+    -- Timing and position data
+    timingInfo          TimingInfo OPTIONAL
+}
+
+-- Signal data representation - hex_string OR pulses array
+SignalData ::= CHOICE {
+    hexString           OCTET STRING (SIZE (1..512)),     -- Raw bytes from hex_string
+    pulsesArray         PulsesData                        -- For complex signals >8 timing bins
+}
+
+-- Pulses array representation
+PulsesData ::= SEQUENCE {
+    count              INTEGER (1..65535),               -- uint16
+    sampleRate         INTEGER (1..4294967295),          -- uint32 (rate_Hz)
+    pulses             SEQUENCE (SIZE (1..65535)) OF INTEGER (0..65535)  -- uint16 array
+}
+
+-- Modulation types
+ModulationType ::= ENUMERATED {
+    ook                (0),
+    fsk                (1),
+    ask                (2),
+    psk                (3),
+    qam                (4)
+}
+
+-- RF parameters
+RFParameters ::= SEQUENCE {
+    centerFreq         INTEGER (1..4294967295),          -- freq_Hz (uint32)
+    freq1              INTEGER (1..4294967295) OPTIONAL, -- freq1_Hz
+    freq2              INTEGER (1..4294967295) OPTIONAL, -- freq2_Hz  
+    bandwidth          INTEGER (1..4294967295) OPTIONAL
+}
+
+-- Signal quality metrics
+SignalQuality ::= SEQUENCE {
+    rssiDb             REAL OPTIONAL,                    -- Signal strength
+    snrDb              REAL OPTIONAL,                    -- Signal-to-noise ratio
+    noiseDb            REAL OPTIONAL,                    -- Noise level
+    rangeDb            REAL OPTIONAL,                    -- Dynamic range
+    depthBits          INTEGER (1..32) OPTIONAL         -- Bit depth
+}
+
+-- Timing and positioning information
+TimingInfo ::= SEQUENCE {
+    offset             INTEGER (0..4294967295) OPTIONAL, -- Stream offset
+    startAgo           INTEGER (0..4294967295) OPTIONAL, -- Signal start time
+    endAgo             INTEGER (0..4294967295) OPTIONAL, -- Signal end time
+    
+    -- OOK specific thresholds
+    ookLowEstimate     INTEGER (0..65535) OPTIONAL,
+    ookHighEstimate    INTEGER (0..65535) OPTIONAL,
+    
+    -- FSK specific frequencies
+    fskF1Est           INTEGER (-32768..32767) OPTIONAL,
+    fskF2EstValue      INTEGER (-32768..32767) OPTIONAL
+}
+
+-- DETECTED Queue: Decoded device information
+DetectedMessage ::= SEQUENCE {
+    -- Message identification  
+    packageId          INTEGER (0..4294967295) OPTIONAL,
+    timestamp          GeneralizedTime OPTIONAL,
+    
+    -- Device information
+    deviceInfo         DeviceInfo,
+    
+    -- Decoded data
+    deviceData         DeviceData,
+    
+    -- Detection metadata
+    detectionMeta      DetectionMetadata OPTIONAL
+}
+
+-- Device identification
+DeviceInfo ::= SEQUENCE {
+    model              UTF8String (SIZE (1..64)),        -- "Toyota", "Acurite", etc.
+    deviceType         UTF8String (SIZE (1..32)) OPTIONAL, -- "TPMS", "Weather", etc.
+    deviceId           UTF8String (SIZE (1..32)) OPTIONAL, -- Device identifier
+    protocol           UTF8String (SIZE (1..32)) OPTIONAL  -- Protocol name
+}
+
+-- Decoded device data (flexible key-value structure)
+DeviceData ::= SEQUENCE OF DeviceDataField
+
+DeviceDataField ::= SEQUENCE {
+    fieldName          UTF8String (SIZE (1..32)),
+    fieldValue         DeviceFieldValue
+}
+
+DeviceFieldValue ::= CHOICE {
+    integerValue       INTEGER (-2147483648..2147483647), -- int32
+    realValue          REAL,                              -- float/double
+    stringValue        UTF8String (SIZE (1..128)),        -- text values
+    booleanValue       BOOLEAN,                           -- true/false
+    bytesValue         OCTET STRING (SIZE (1..256))       -- raw bytes
+}
+
+-- Detection quality and validation
+DetectionMetadata ::= SEQUENCE {
+    confidence         REAL (0.0..1.0) OPTIONAL,         -- Detection confidence 0-1
+    errorCorrection    UTF8String (SIZE (1..16)) OPTIONAL, -- "CRC", "Checksum", etc.
+    protocolVersion    INTEGER (1..255) OPTIONAL,         -- Device protocol version
+    rawBits            INTEGER (1..1024) OPTIONAL         -- Number of decoded bits
+}
+
+-- STATUS Queue: System status and health
+StatusMessage ::= SEQUENCE {
+    timestamp          GeneralizedTime,
+    systemStatus       SystemStatus,
+    statistics         SystemStatistics OPTIONAL,
+    errors             SEQUENCE OF ErrorInfo OPTIONAL
+}
+
+SystemStatus ::= ENUMERATED {
+    healthy            (0),
+    warning            (1),
+    error              (2),
+    critical           (3),
+    shutdown           (4)
+}
+
+SystemStatistics ::= SEQUENCE {
+    messagesProcessed  INTEGER (0..4294967295),
+    devicesDetected    INTEGER (0..4294967295),
+    errorCount         INTEGER (0..4294967295),
+    averageLatency     REAL OPTIONAL,                     -- Processing latency in ms
+    memoryUsage        INTEGER (0..4294967295) OPTIONAL,  -- Memory usage in bytes
+    cpuUsage           REAL (0.0..100.0) OPTIONAL         -- CPU usage percentage
+}
+
+ErrorInfo ::= SEQUENCE {
+    errorCode          INTEGER (1..65535),
+    errorMessage       UTF8String (SIZE (1..256)),
+    timestamp          GeneralizedTime,
+    severity           ErrorSeverity
+}
+
+ErrorSeverity ::= ENUMERATED {
+    info               (0),
+    warning            (1),
+    error              (2),
+    critical           (3)
+}
+
+-- CONFIG Queue: Configuration and control messages
+ConfigMessage ::= SEQUENCE {
+    timestamp          GeneralizedTime,
+    configAction       ConfigAction,
+    configData         ConfigData OPTIONAL
+}
+
+ConfigAction ::= ENUMERATED {
+    getConfig          (0),
+    setConfig          (1),
+    resetConfig        (2),
+    reloadDevices      (3),
+    enableDevice       (4),
+    disableDevice      (5)
+}
+
+ConfigData ::= SEQUENCE {
+    deviceConfigs      SEQUENCE OF DeviceConfig OPTIONAL,
+    systemSettings     SystemSettings OPTIONAL,
+    filterSettings     FilterSettings OPTIONAL
+}
+
+DeviceConfig ::= SEQUENCE {
+    deviceName         UTF8String (SIZE (1..64)),
+    enabled            BOOLEAN,
+    priority           INTEGER (0..255) OPTIONAL,
+    parameters         SEQUENCE OF ConfigParameter OPTIONAL
+}
+
+ConfigParameter ::= SEQUENCE {
+    paramName          UTF8String (SIZE (1..32)),
+    paramValue         UTF8String (SIZE (1..128))
+}
+
+SystemSettings ::= SEQUENCE {
+    verbosityLevel     INTEGER (0..5),
+    maxQueueSize       INTEGER (1..4294967295) OPTIONAL,
+    processingTimeout  INTEGER (1..3600) OPTIONAL,        -- Timeout in seconds
+    enableStatistics   BOOLEAN OPTIONAL
+}
+
+FilterSettings ::= SEQUENCE {
+    frequencyRange     FrequencyRange OPTIONAL,
+    rssiThreshold      REAL OPTIONAL,
+    snrThreshold       REAL OPTIONAL
+}
+
+FrequencyRange ::= SEQUENCE {
+    minFreq            INTEGER (1..4294967295),
+    maxFreq            INTEGER (1..4294967295)
+}
+
+END

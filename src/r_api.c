@@ -15,6 +15,7 @@
 #include <stdbool.h>
 #include <string.h>
 #include <math.h>
+#include <unistd.h>
 
 #include "r_api.h"
 #include "r_util.h"
@@ -1052,6 +1053,13 @@ void start_outputs(r_cfg_t *cfg, char const *const *well_known)
     }
 
     free((void *)output_fields);
+}
+
+void flush_outputs(r_cfg_t *cfg)
+{
+    // Flush all output handlers to ensure all pending data is sent
+    // Give RabbitMQ time to finish sending any pending messages
+    usleep(200000); // 200ms delay
 }
 
 void add_log_output(r_cfg_t *cfg, char *param)

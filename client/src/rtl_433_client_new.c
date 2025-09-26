@@ -56,8 +56,6 @@
 #include "mongoose.h"
 #include "rtl433_input.h"
 #include "output_rabbitmq.h"
-#include "rtl433_api_wrappers.h"
-#include "rtl433_signal_format.h"
 
 #ifdef _WIN32
 #include <io.h>
@@ -114,14 +112,14 @@ static void rabbitmq_pulse_handler(pulse_data_t *pulse_data, void *user_data) {
     // Check if this is FSK signal (FSK if both freq1 and freq2 are present and different)
     if (pulse_data->freq1_hz > 0 && pulse_data->freq2_hz > 0 && 
         pulse_data->freq1_hz != pulse_data->freq2_hz) {
-        events = run_fsk_demods_ex(&cfg->demod->r_devs, pulse_data);
+        events = run_fsk_demods(&cfg->demod->r_devs, pulse_data);
         if (events > 0) {
             signal_stats.successfully_decoded++;
         } else {
             signal_stats.decoding_failed++;
         }
     } else {
-        events = run_ook_demods_ex(&cfg->demod->r_devs, pulse_data);
+        events = run_ook_demods(&cfg->demod->r_devs, pulse_data);
         if (events > 0) {
             signal_stats.successfully_decoded++;
         } else {
@@ -636,7 +634,7 @@ static void sdr_callback(unsigned char *iq_buf, uint32_t len, void *ctx)
                 calc_rssi_snr(cfg, &demod->pulse_data);
                 if (demod->analyze_pulses) fprintf(stderr, "Detected OOK package\t%s\n", time_pos_str(cfg, demod->pulse_data.start_ago, time_str));
 
-                p_events += run_ook_demods_ex(&demod->r_devs, &demod->pulse_data);
+                p_events += run_ook_demods(&demod->r_devs, &demod->pulse_data);
                 cfg->total_frames_ook += 1;
                 cfg->total_frames_events += p_events > 0;
                 cfg->frames_ook +=1;
@@ -673,7 +671,7 @@ static void sdr_callback(unsigned char *iq_buf, uint32_t len, void *ctx)
                 calc_rssi_snr(cfg, &demod->fsk_pulse_data);
                 if (demod->analyze_pulses) fprintf(stderr, "Detected FSK package\t%s\n", time_pos_str(cfg, demod->fsk_pulse_data.start_ago, time_str));
 
-                p_events += run_fsk_demods_ex(&demod->r_devs, &demod->fsk_pulse_data);
+                p_events += run_fsk_demods(&demod->r_devs, &demod->fsk_pulse_data);
                 cfg->total_frames_fsk +=1;
                 cfg->total_frames_events += p_events > 0;
                 cfg->frames_fsk += 1;
@@ -1338,7 +1336,6 @@ static void parse_conf_option(r_cfg_t *cfg, int opt, char *arg)
         else if (strncmp(arg, "rabbitmq", 8) == 0) {
             add_rabbitmq_output(cfg, arg);
             g_rabbitmq_output_enabled = 1; // Mark RabbitMQ output as enabled
-            rtl433_enable_rabbitmq_output(); // Enable for shared library
             fprintf(stderr, "🐰 RabbitMQ output enabled: %s\n", arg);
         }
         else if (strncmp(arg, "influx", 6) == 0) {
@@ -1933,9 +1930,9 @@ int main(int argc, char **argv) {
                     list_t single_dev = {0};
                     list_push(&single_dev, r_dev);
                     if (!pulse_data.fsk_f2_est)
-                        r += run_ook_demods_ex(&single_dev, &pulse_data);
+                        r += run_ook_demods(&single_dev, &pulse_data);
                     else
-                        r += run_fsk_demods_ex(&single_dev, &pulse_data);
+                        r += run_fsk_demods(&single_dev, &pulse_data);
                     list_free_elems(&single_dev, NULL);
                 } else
                 r += pulse_slicer_string(e, r_dev);
@@ -1946,9 +1943,9 @@ int main(int argc, char **argv) {
                 pulse_data_t pulse_data = {0};
                 rfraw_parse(&pulse_data, line);
                 if (!pulse_data.fsk_f2_est)
-                    r += run_ook_demods_ex(&demod->r_devs, &pulse_data);
+                    r += run_ook_demods(&demod->r_devs, &pulse_data);
                 else
-                    r += run_fsk_demods_ex(&demod->r_devs, &pulse_data);
+                    r += run_fsk_demods(&demod->r_devs, &pulse_data);
             } else
             for (void **iter = demod->r_devs.elems; iter && *iter; ++iter) {
                 r_device *r_dev = *iter;
@@ -1962,6 +1959,7 @@ int main(int argc, char **argv) {
             fclose(fp);
         }
 
+        flush_outputs(cfg);
         r_free_cfg(cfg);
         exit(!r);
     }
@@ -1972,9 +1970,9 @@ int main(int argc, char **argv) {
             pulse_data_t pulse_data = {0};
             rfraw_parse(&pulse_data, cfg->test_data);
             if (!pulse_data.fsk_f2_est)
-                r += run_ook_demods_ex(&demod->r_devs, &pulse_data);
+                r += run_ook_demods(&demod->r_devs, &pulse_data);
             else
-                r += run_fsk_demods_ex(&demod->r_devs, &pulse_data);
+                r += run_fsk_demods(&demod->r_devs, &pulse_data);
         } else
         for (void **iter = demod->r_devs.elems; iter && *iter; ++iter) {
             r_device *r_dev = *iter;
@@ -1982,6 +1980,7 @@ int main(int argc, char **argv) {
                 print_logf(LOG_NOTICE, "Input", "Verifying test data with device %s.", r_dev->name);
             r += pulse_slicer_string(cfg->test_data, r_dev);
         }
+        flush_outputs(cfg);
         r_free_cfg(cfg);
         exit(!r);
     }
@@ -2060,10 +2059,10 @@ int main(int argc, char **argv) {
                     }
 
                     if (demod->pulse_data.fsk_f2_est) {
-                        run_fsk_demods_ex(&demod->r_devs, &demod->pulse_data);
+                        run_fsk_demods(&demod->r_devs, &demod->pulse_data);
                     }
                     else {
-                        int p_events = run_ook_demods_ex(&demod->r_devs, &demod->pulse_data);
+                        int p_events = run_ook_demods(&demod->r_devs, &demod->pulse_data);
                         if (cfg->verbosity >= LOG_DEBUG)
                             pulse_data_print(&demod->pulse_data);
                         if (demod->analyze_pulses && (cfg->grab_mode <= 1 || (cfg->grab_mode == 2 && p_events == 0) || (cfg->grab_mode == 3 && p_events > 0))) {
@@ -2153,7 +2152,7 @@ int main(int argc, char **argv) {
         free(test_mode_buf);
         free(test_mode_float_buf);
         
-        
+        flush_outputs(cfg);
         r_free_cfg(cfg);
         exit(0);
     }
@@ -2274,6 +2273,9 @@ int main(int argc, char **argv) {
         g_rabbitmq_input_url = NULL;
     }
 
+    // Flush output handlers before cleanup
+    flush_outputs(cfg);
+    
     r_free_cfg(cfg);
 
     return r >= 0 ? r : -r;

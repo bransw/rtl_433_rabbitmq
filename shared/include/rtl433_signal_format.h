@@ -131,12 +131,6 @@ int rtl433_has_rabbitmq_active(void);
  */
 int rtl433_send_bitbuffer_to_rabbitmq(bitbuffer_t const *bitbuffer, pulse_data_t const *pulse_data);
 
-/**
- * @brief Send original pulse_data to RabbitMQ (if configured)
- * @param pulse_data Original pulse_data to send
- * @return 0 on success, -1 on error
- */
-int rtl433_send_pulse_data_to_rabbitmq(pulse_data_t const *pulse_data);
 
 /**
  * @brief Print bitbuffer data (debug function)

@@ -399,7 +399,7 @@ R_API void data_output_print(data_output_t *output, data_t *data)
     if (output->output_print) {
         output->output_print(output, data);
     }
-    else {
+    else if (output->print_data) {
         output->print_data(output, data, NULL);
     }
 }

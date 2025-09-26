@@ -91,7 +91,7 @@ static void R_API_CALLCONV print_rabbitmq_data(data_output_t *output, data_t *da
             // Clean approach: send only device data without pulse analysis
             
             target_queue = rabbitmq->detected_queue;
-            print_logf(LOG_DEBUG, "RabbitMQ", "Sending device data to 'detected': %.100s...", json_buffer);
+            print_logf(LOG_NOTICE, "RabbitMQ", "Sending device data to 'detected': %.100s...", json_buffer);
             
         } else if (data_mod) {
             // This is raw pulse data - send to 'signals' queue
@@ -111,12 +111,12 @@ static void R_API_CALLCONV print_rabbitmq_data(data_output_t *output, data_t *da
             // For now, use standard JSON until we can properly extract pulse_data_t
             data_print_jsons(data, json_buffer, sizeof(json_buffer));
             target_queue = rabbitmq->signals_queue;
-            print_logf(LOG_DEBUG, "RabbitMQ", "Sending raw pulse data to 'signals': %.100s...", json_buffer);
         }
         
         // Send raw JSON directly instead of converting to rtl433_message_t
         // This preserves the original data format
-        if (rtl433_transport_send_raw_json_to_queue(&rabbitmq->conn, json_buffer, target_queue) != 0) {
+        int send_result = rtl433_transport_send_raw_json_to_queue(&rabbitmq->conn, json_buffer, target_queue);
+        if (send_result != 0) {
             // Fallback: if raw JSON sending fails, use the old method
             rtl433_message_t *message = rtl433_message_create_from_json(json_buffer);
             if (message) {
@@ -304,6 +304,7 @@ struct data_output *data_output_rabbitmq_create(struct mg_mgr *mgr, char *param,
     rabbitmq->output.print_string = print_rabbitmq_string;
     rabbitmq->output.print_double = print_rabbitmq_double;
     rabbitmq->output.print_int    = print_rabbitmq_int;
+    rabbitmq->output.output_print = NULL; // Use print_data interface
     rabbitmq->output.output_free  = data_output_rabbitmq_free;
     
     print_logf(LOG_DEBUG, "RabbitMQ", "RabbitMQ output created successfully");

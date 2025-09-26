@@ -221,9 +221,7 @@ data_t *pulse_data_print_data(pulse_data_t const *data)
         return override_func(data);
     }
     
-    // Standard implementation with signal ID
-    static int signal_id = 0;
-    signal_id++;
+    // Standard implementation
     
     int pulses[2 * PD_MAX_PULSES];
     double to_us = 1e6 / data->sample_rate;
@@ -234,7 +232,6 @@ data_t *pulse_data_print_data(pulse_data_t const *data)
     
     /* clang-format off */
     return data_make(
-            "signal_id",        "", DATA_INT,    signal_id,
             "mod",              "", DATA_STRING, (data->fsk_f2_est) ? "FSK" : "OOK",
             "count",            "", DATA_INT,    data->num_pulses,
             "pulses",           "", DATA_ARRAY,  data_array(2 * data->num_pulses, DATA_INT, pulses),
