@@ -4,9 +4,9 @@ libdir=${exec_prefix}/lib
 includedir=${prefix}/include
 
 Name: rtl433_shared
-Description: Общая библиотека для rtl_433 клиента и сервера
+Description: Shared library for rtl_433 client and server with ASN.1 support
 Version: 1.0.0
 Requires: json-c
-Libs: -L${libdir} -lrtl433_shared
+Libs: -L${libdir} -lrtl433_shared -lm
 Cflags: -I${includedir}/rtl433
 

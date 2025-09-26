@@ -354,7 +354,7 @@ static int json_to_pulse_data(json_object *json_obj, pulse_data_t *pulse_data)
     json_object *freq_obj;
     if (json_object_object_get_ex(json_obj, "freq_Hz", &freq_obj)) {
         pulse_data->freq1_hz = json_object_get_int(freq_obj);
-        printf("📻 Frequency: %d Hz\n", pulse_data->freq1_hz);
+        printf("📻 Frequency: %.0f Hz\n", pulse_data->freq1_hz);
     }
 
     // Parse sample rate
