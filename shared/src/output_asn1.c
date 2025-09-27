@@ -199,14 +199,11 @@ static void R_API_CALLCONV print_asn1_data(data_output_t *output, data_t *data, 
         
         // Send the ASN.1 encoded message
         if (asn1_buffer.result == RTL433_ASN1_OK && asn1_buffer.buffer) {
-            // For now, we'll use the raw JSON function but send binary data
-            // TODO: Add proper binary message sending function to transport
-            
-            // Convert binary data to base64 or hex for transport
-            // For now, just send the raw binary data as-is
-            int result = rtl433_transport_send_raw_json_to_queue(&asn1_out->conn, 
-                                                               (const char*)asn1_buffer.buffer, 
-                                                               target_queue);
+            // Send binary ASN.1 data with proper content type
+            int result = rtl433_transport_send_binary_to_queue(&asn1_out->conn, 
+                                                             asn1_buffer.buffer, 
+                                                             asn1_buffer.buffer_size,
+                                                             target_queue);
             
             if (result != 0) {
                 print_logf(LOG_ERROR, "ASN1", "Failed to send ASN.1 message to %s", target_queue);

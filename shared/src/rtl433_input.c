@@ -565,35 +565,60 @@ static void internal_asn1_message_handler(rtl433_message_t *message, void *user_
 
     asn1_handler_context_t *context = (asn1_handler_context_t*)user_data;
 
-    printf("📦 Received ASN.1 message: %zu bytes\n", strlen(message->hex_string));
+    uint8_t *binary_data = NULL;
+    size_t bin_len = 0;
 
-    // Convert hex string to binary data
-    size_t hex_len = strlen(message->hex_string);
-    size_t bin_len = hex_len / 2;
-    uint8_t *binary_data = malloc(bin_len);
-    
-    if (!binary_data) {
-        printf("❌ Failed to allocate binary data buffer\n");
-        return;
-    }
-
-    // Convert hex string to binary
-    for (size_t i = 0; i < bin_len; i++) {
-        sscanf(message->hex_string + 2*i, "%2hhx", &binary_data[i]);
-    }
-
-    // Parse ASN.1 binary data to pulse_data
-    pulse_data_t *pulse_data = rtl433_input_parse_pulse_data_from_asn1(binary_data, bin_len);
-    
-    free(binary_data);
-
-    if (pulse_data) {
-        // Call the original handler with decoded pulse data
-        context->original_handler(pulse_data, context->original_user_data);
+    if (message->is_binary && message->hex_string && message->binary_data_size > 0) {
+        // Direct binary data from transport
+        printf("📦 Received ASN.1 binary message: %zu bytes\n", message->binary_data_size);
+        binary_data = (uint8_t*)message->hex_string;
+        bin_len = message->binary_data_size;
         
-        // Free the pulse data (handler should have processed it)
-        free(pulse_data);
+        // Parse ASN.1 binary data to pulse_data (no need to free binary_data - it's owned by message)
+        pulse_data_t *pulse_data = rtl433_input_parse_pulse_data_from_asn1(binary_data, bin_len);
+        
+        if (pulse_data) {
+            // Call the original handler with decoded pulse data
+            context->original_handler(pulse_data, context->original_user_data);
+            
+            // Free the pulse data (handler should have processed it)
+            free(pulse_data);
+        } else {
+            printf("❌ Failed to parse ASN.1 pulse data\n");
+        }
+    } else if (message->hex_string && !message->is_binary) {
+        // Legacy: hex string format (convert from hex to binary)
+        printf("📦 Received ASN.1 hex message: %zu bytes\n", strlen(message->hex_string));
+        
+        size_t hex_len = strlen(message->hex_string);
+        bin_len = hex_len / 2;
+        binary_data = malloc(bin_len);
+        
+        if (!binary_data) {
+            printf("❌ Failed to allocate binary data buffer\n");
+            return;
+        }
+
+        // Convert hex string to binary
+        for (size_t i = 0; i < bin_len; i++) {
+            sscanf(message->hex_string + 2*i, "%2hhx", &binary_data[i]);
+        }
+
+        // Parse ASN.1 binary data to pulse_data
+        pulse_data_t *pulse_data = rtl433_input_parse_pulse_data_from_asn1(binary_data, bin_len);
+        
+        free(binary_data); // Free allocated buffer
+        
+        if (pulse_data) {
+            // Call the original handler with decoded pulse data
+            context->original_handler(pulse_data, context->original_user_data);
+            
+            // Free the pulse data (handler should have processed it)
+            free(pulse_data);
+        } else {
+            printf("❌ Failed to parse ASN.1 pulse data\n");
+        }
     } else {
-        printf("❌ Failed to parse ASN.1 pulse data\n");
+        printf("❌ Invalid ASN.1 message format\n");
     }
 }

@@ -53,8 +53,10 @@ typedef struct {
     char *modulation;       // "OOK" или "FSK"
     uint32_t timestamp;
     pulse_data_t *pulse_data;
-    char *hex_string;       // Опциональная hex-строка
+    char *hex_string;       // Опциональная hex-строка или binary data
     void *metadata;         // Дополнительные метаданные
+    size_t binary_data_size;  // Size of binary data in hex_string
+    int is_binary;            // Flag: 1 = binary data, 0 = text/JSON
 } rtl433_message_t;
 
 /// Callback для обработки полученных сообщений
@@ -81,6 +83,9 @@ void rtl433_transport_disconnect(rtl433_transport_connection_t *conn);
 int rtl433_transport_send_message(rtl433_transport_connection_t *conn, rtl433_message_t *message);
 int rtl433_transport_send_message_to_queue(rtl433_transport_connection_t *conn, rtl433_message_t *message, const char *queue_name);
 int rtl433_transport_send_raw_json_to_queue(rtl433_transport_connection_t *conn, const char *json_data, const char *queue_name);
+
+/// Send binary data to specific queue (for ASN.1 messages)
+int rtl433_transport_send_binary_to_queue(rtl433_transport_connection_t *conn, const uint8_t *binary_data, size_t data_size, const char *queue_name);
 
 /// Прием сообщений (для сервера)
 int rtl433_transport_receive_messages(rtl433_transport_connection_t *conn, 

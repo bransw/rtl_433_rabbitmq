@@ -509,6 +509,52 @@ int rtl433_transport_send_raw_json_to_queue(rtl433_transport_connection_t *conn,
     }
 }
 
+#ifdef ENABLE_RABBITMQ
+static int rtl433_transport_rabbitmq_send_binary_to_queue(rtl433_transport_connection_t *conn, const uint8_t *binary_data, size_t data_size, const char *queue_name)
+{
+    if (!conn->connection_data || !queue_name || !binary_data || data_size == 0) return -1;
+    
+    rabbitmq_connection_data_t *rabbitmq = (rabbitmq_connection_data_t*)conn->connection_data;
+    
+    // Set binary content type for ASN.1 messages
+    amqp_basic_properties_t props;
+    props._flags = AMQP_BASIC_CONTENT_TYPE_FLAG | AMQP_BASIC_DELIVERY_MODE_FLAG;
+    props.content_type = amqp_cstring_bytes("application/octet-stream");
+    props.delivery_mode = 2; // persistent
+    
+    amqp_bytes_t body;
+    body.len = data_size;
+    body.bytes = (void*)binary_data;
+    
+    int result = amqp_basic_publish(rabbitmq->conn, rabbitmq->channel,
+                                   amqp_cstring_bytes(conn->config->exchange),
+                                   amqp_cstring_bytes(queue_name),
+                                   0, 0, &props, body);
+    
+    if (result != AMQP_STATUS_OK) {
+        g_transport_stats.send_errors++;
+        return -1;
+    }
+    
+    g_transport_stats.messages_sent++;
+    return 0;
+}
+#endif
+
+int rtl433_transport_send_binary_to_queue(rtl433_transport_connection_t *conn, const uint8_t *binary_data, size_t data_size, const char *queue_name)
+{
+    if (!conn || !binary_data || data_size == 0 || !conn->connected || !queue_name) return -1;
+    
+    switch (conn->config->type) {
+#ifdef ENABLE_RABBITMQ
+        case RTL433_TRANSPORT_RABBITMQ:
+            return rtl433_transport_rabbitmq_send_binary_to_queue(conn, binary_data, data_size, queue_name);
+#endif
+        default:
+            return -1;
+    }
+}
+
 // === MESSAGE RECEPTION ===
 
 #ifdef ENABLE_RABBITMQ
@@ -559,22 +605,49 @@ static int rtl433_transport_rabbitmq_receive(rtl433_transport_connection_t *conn
     amqp_rpc_reply_t reply = amqp_consume_message(rabbitmq->conn, &envelope, &timeout, 0);
     
     if (reply.reply_type == AMQP_RESPONSE_NORMAL) {
-        // Парсинг сообщения
-        char *message_body = malloc(envelope.message.body.len + 1);
-        if (message_body) {
-            memcpy(message_body, envelope.message.body.bytes, envelope.message.body.len);
-            message_body[envelope.message.body.len] = '\0';
-            
-            // Создание rtl433_message_t из JSON
-            rtl433_message_t *message = rtl433_message_create_from_json(message_body);
+        // Check content type to determine message format
+        const char *content_type = NULL;
+        if (envelope.message.properties._flags & AMQP_BASIC_CONTENT_TYPE_FLAG) {
+            content_type = (const char*)envelope.message.properties.content_type.bytes;
+        }
+        
+        // Handle binary ASN.1 messages
+        if (content_type && strncmp(content_type, "application/octet-stream", 24) == 0) {
+            // Binary ASN.1 message - create a special message structure
+            rtl433_message_t *message = calloc(1, sizeof(rtl433_message_t));
             if (message) {
-                // Вызов обработчика
-                handler(message, user_data);
+                // Store binary data in hex_string field for compatibility
+                // The ASN.1 handler will know to treat this as binary data
+                message->hex_string = malloc(envelope.message.body.len);
+                if (message->hex_string) {
+                    memcpy(message->hex_string, envelope.message.body.bytes, envelope.message.body.len);
+                    message->binary_data_size = envelope.message.body.len;
+                    message->is_binary = 1; // Flag to indicate binary data
+                    
+                    // Call handler with binary message
+                    handler(message, user_data);
+                    g_transport_stats.messages_received++;
+                }
                 rtl433_message_free(message);
-                g_transport_stats.messages_received++;
             }
-            
-            free(message_body);
+        } else {
+            // JSON message - handle as before
+            char *message_body = malloc(envelope.message.body.len + 1);
+            if (message_body) {
+                memcpy(message_body, envelope.message.body.bytes, envelope.message.body.len);
+                message_body[envelope.message.body.len] = '\0';
+                
+                // Создание rtl433_message_t из JSON
+                rtl433_message_t *message = rtl433_message_create_from_json(message_body);
+                if (message) {
+                    // Вызов обработчика
+                    handler(message, user_data);
+                    rtl433_message_free(message);
+                    g_transport_stats.messages_received++;
+                }
+                
+                free(message_body);
+            }
         }
         
         // Подтверждение сообщения
