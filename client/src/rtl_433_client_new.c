@@ -85,6 +85,9 @@ static char *g_rabbitmq_input_url = NULL;
 // Global variable to track RabbitMQ output configuration
 static int g_rabbitmq_output_enabled = 0;
 
+// Global variable to share raw_mode with output modules
+int g_rtl433_raw_mode = 0;
+
 // Statistics for signal processing (both client and server modes)
 static struct {
     int total_received;
@@ -249,8 +252,8 @@ static void usage(int exit_code)
             "  [-n <value>] Specify number of samples to take (each sample is an I/Q pair)\n"
             "  [-T <seconds>] Specify number of seconds to run, also 12:34 or 1h23m45s\n"
             "  [-E hop | quit] Hop/Quit after outputting successful event(s)\n"
-            "  [-Q [mode] | --enable-raw-signals] Enable raw pulse data output to 'signals' queue\n"
-            "       mode: 1=all signals (default), 2=no events, 3=with events\n"
+            "  [-Q [mode]] Queue routing mode for RabbitMQ and ASN.1 outputs\n"
+            "       0 or 3: both queues (signals+detected) [default], 1: signals only, 2: detected only\n"
             "  [-h] Output this usage help and exit\n"
             "       Use -d, -g, -R, -X, -F, -M, -r, -w, or -W without argument for more help\n\n",
             DEFAULT_FREQUENCY, DEFAULT_HOP_TIME, DEFAULT_SAMPLE_RATE);
@@ -653,7 +656,9 @@ static void sdr_callback(unsigned char *iq_buf, uint32_t len, void *ctx)
                 // Count all processed signals for statistics (OOK)
                 signal_stats.total_sent++;
                 
-                if (cfg->raw_mode == 1 || (cfg->raw_mode == 2 && p_events == 0) || (cfg->raw_mode == 3 && p_events > 0)) {
+                // Send raw pulse data based on -Q parameter
+                // -Q 0 or -Q 3: both queues, -Q 1: signals only, -Q 2: skip raw signals
+                if (cfg->raw_mode == 0 || cfg->raw_mode == 1 || cfg->raw_mode == 3) {
                     data_t *data = pulse_data_print_data(&demod->pulse_data);
                     event_occurred_handler(cfg, data);
                 }
@@ -690,7 +695,9 @@ static void sdr_callback(unsigned char *iq_buf, uint32_t len, void *ctx)
                 // Count all processed signals for statistics (FSK) - but don't double count
                 // signal_stats.total_sent++; // This was already counted in OOK section
                 
-                if (cfg->raw_mode == 1 || (cfg->raw_mode == 2 && p_events == 0) || (cfg->raw_mode == 3 && p_events > 0)) {
+                // Send raw pulse data based on -Q parameter
+                // -Q 0 or -Q 3: both queues, -Q 1: signals only, -Q 2: skip raw signals
+                if (cfg->raw_mode == 0 || cfg->raw_mode == 1 || cfg->raw_mode == 3) {
                     data_t *data = pulse_data_print_data(&demod->fsk_pulse_data);
                     event_occurred_handler(cfg, data);
                 }
@@ -1448,10 +1455,21 @@ static void parse_conf_option(r_cfg_t *cfg, int opt, char *arg)
         break;
     case 'Q':
         if (arg)
-            cfg->raw_mode = atoi(arg);  // Parse raw mode: 1=all, 2=no events, 3=with events
+            cfg->raw_mode = atoi(arg);  // Parse raw mode
         else
-            cfg->raw_mode = 1;  // Default: send all raw pulse data
-        print_logf(LOG_INFO, "Config", "Raw signals mode enabled: %d", cfg->raw_mode);
+            cfg->raw_mode = 0;  // Default: send to both queues
+
+        // Validate raw_mode values
+        if (cfg->raw_mode < 0 || cfg->raw_mode > 3) {
+            fprintf(stderr, "Invalid -Q value: %d. Valid values: 0 (both queues), 1 (signals only), 2 (detected only), 3 (both queues)\n", cfg->raw_mode);
+            exit(1);
+        }
+
+        // Update global variable for output modules
+        g_rtl433_raw_mode = cfg->raw_mode;
+
+        const char* mode_desc[] = {"both queues", "signals only", "detected only", "both queues"};
+        print_logf(LOG_INFO, "Config", "Queue routing mode: %d (%s)", cfg->raw_mode, mode_desc[cfg->raw_mode]);
         break;
     case 'E':
         if (arg && !strcmp(arg, "hop")) {

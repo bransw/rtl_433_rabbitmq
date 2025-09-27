@@ -27,6 +27,9 @@
 #include "rtl433_transport.h"
 #include "rtl433_config.h"
 
+// Global variable to access raw_mode from client
+extern int g_rtl433_raw_mode;
+
 /* RabbitMQ client abstraction */
 
 typedef struct {
@@ -78,8 +81,29 @@ static void R_API_CALLCONV print_rabbitmq_data(data_output_t *output, data_t *da
             data_mod = d;
     }
     
-    // Route data based on type
+    // Route data based on type and -Q parameter
     if (data_model || data_mod) {
+        int should_send = 0;
+
+        if (data_model) {
+            // This is decoded device data
+            // Check -Q parameter: 0=both, 1=signals only, 2=detected only, 3=both
+            should_send = (g_rtl433_raw_mode == 0 || g_rtl433_raw_mode == 2 || g_rtl433_raw_mode == 3);
+
+            if (!should_send) {
+                print_logf(LOG_DEBUG, "RabbitMQ", "Skipping detected message due to -Q %d", g_rtl433_raw_mode);
+                return;
+            }
+        } else if (data_mod) {
+            // This is raw pulse data
+            // Check -Q parameter: 0=both, 1=signals only, 2=detected only, 3=both
+            should_send = (g_rtl433_raw_mode == 0 || g_rtl433_raw_mode == 1 || g_rtl433_raw_mode == 3);
+
+            if (!should_send) {
+                print_logf(LOG_DEBUG, "RabbitMQ", "Skipping signal message due to -Q %d", g_rtl433_raw_mode);
+                return;
+            }
+        }
         char json_buffer[8192];  // Larger buffer for combined data
         const char *target_queue = NULL;
         
