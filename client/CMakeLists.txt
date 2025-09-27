@@ -16,6 +16,24 @@ if(NOT LIBRTLSDR_FOUND)
     message(FATAL_ERROR "librtlsdr not found")
 endif()
 
+# Find libusb
+pkg_check_modules(LIBUSB libusb-1.0)
+if(NOT LIBUSB_FOUND)
+    message(FATAL_ERROR "libusb-1.0 not found")
+endif()
+
+# Find OpenSSL
+find_package(OpenSSL REQUIRED)
+
+# Find threads
+find_package(Threads REQUIRED)
+
+# Find SoapySDR
+pkg_check_modules(SOAPYSDR SoapySDR)
+if(NOT SOAPYSDR_FOUND)
+    message(WARNING "SoapySDR not found - some SDR features may not work")
+endif()
+
 # Find paho-mqtt for MQTT transport
 find_path(PAHO_MQTT_INCLUDE_DIR MQTTClient.h)
 find_library(PAHO_MQTT_LIBRARY paho-mqtt3c)
@@ -47,29 +65,6 @@ include_directories(${RTL433_SHARED_INCLUDE_DIR})
 # Source files for client
 set(CLIENT_SOURCES
     src/rtl_433_client_new.c
-    
-    # Copy necessary files from main project
-    ../src/sdr.c
-    ../src/baseband.c
-    ../src/pulse_detect.c
-    ../src/pulse_detect_fsk.c
-    ../src/pulse_data.c
-    ../src/pulse_slicer.c
-    ../src/abuf.c
-    ../src/bitbuffer.c
-    ../src/bit_util.c
-    ../src/data.c
-    ../src/decoder_util.c
-    ../src/r_util.c
-    ../src/compat_time.c
-    ../src/compat_paths.c
-    ../src/logger.c
-    ../src/fileformat.c
-    ../src/am_analyze.c
-    ../src/confparse.c
-    ../src/optparse.c
-    ../src/list.c
-    ../src/jsmn.c
 )
 
 # Add getopt for Windows
@@ -83,11 +78,23 @@ add_executable(rtl_433_client ${CLIENT_SOURCES})
 # Link libraries
 target_link_libraries(rtl_433_client 
     ${RTL433_SHARED_LIBRARIES}
+    ${CMAKE_CURRENT_SOURCE_DIR}/../build/src/libr_433.a  # Main rtl_433 library
+    ${CMAKE_CURRENT_SOURCE_DIR}/../build/src/libdata.a   # Data handling library
     ${LIBRTLSDR_LIBRARIES}
+    ${LIBUSB_LIBRARIES}
     ${JSON_C_LIBRARIES}
     ${CURL_LIBRARIES}
+    OpenSSL::SSL
+    OpenSSL::Crypto
+    Threads::Threads
     m
 )
+
+# Add SoapySDR if found
+if(SOAPYSDR_FOUND)
+    target_link_libraries(rtl_433_client ${SOAPYSDR_LIBRARIES})
+    target_include_directories(rtl_433_client PRIVATE ${SOAPYSDR_INCLUDE_DIRS})
+endif()
 
 if(PAHO_MQTT_INCLUDE_DIR AND PAHO_MQTT_LIBRARY)
     target_include_directories(rtl_433_client PRIVATE ${PAHO_MQTT_INCLUDE_DIR})
@@ -109,6 +116,7 @@ target_compile_options(rtl_433_client PRIVATE
 # Include header directories
 target_include_directories(rtl_433_client PRIVATE 
     ${LIBRTLSDR_INCLUDE_DIRS}
+    ${LIBUSB_INCLUDE_DIRS}
     ${JSON_C_INCLUDE_DIRS}
     ${CURL_INCLUDE_DIRS}
 )

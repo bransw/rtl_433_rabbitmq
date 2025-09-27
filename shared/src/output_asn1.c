@@ -30,6 +30,9 @@
 // Include ASN.1 support
 #include "rtl433_asn1.h"
 
+// Global variable to access raw_mode from client
+extern int g_rtl433_raw_mode;
+
 /* ASN.1 RabbitMQ client abstraction */
 
 typedef struct {
@@ -82,14 +85,27 @@ static void R_API_CALLCONV print_asn1_data(data_output_t *output, data_t *data, 
             data_mod = d;
     }
     
-    // Route data based on type
+    // Debug: Print what data we received
+    print_logf(LOG_DEBUG, "ASN1", "Received data - model: %s, mod: %s", 
+               data_model ? "YES" : "NO", data_mod ? "YES" : "NO");
+    
+    // Route data based on type and -Q parameter
     if (data_model || data_mod) {
         const char *target_queue = NULL;
         rtl433_asn1_buffer_t asn1_buffer = {0};
+        int should_send = 0;
         
         if (data_model) {
             // This is decoded device data - encode as DetectedMessage
             target_queue = asn1_out->detected_queue;
+            
+            // Check -Q parameter: 0=both, 1=signals only, 2=detected only, 3=both
+            should_send = (g_rtl433_raw_mode == 0 || g_rtl433_raw_mode == 2 || g_rtl433_raw_mode == 3);
+            
+            if (!should_send) {
+                print_logf(LOG_DEBUG, "ASN1", "Skipping detected message due to -Q %d", g_rtl433_raw_mode);
+                return;
+            }
             
             // Extract device information
             const char *model = (data_model->type == DATA_STRING) ? data_model->value.v_ptr : "unknown";
@@ -147,6 +163,14 @@ static void R_API_CALLCONV print_asn1_data(data_output_t *output, data_t *data, 
             // This is raw pulse data - encode as SignalMessage
             target_queue = asn1_out->signals_queue;
             
+            // Check -Q parameter: 0=both, 1=signals only, 2=detected only, 3=both
+            should_send = (g_rtl433_raw_mode == 0 || g_rtl433_raw_mode == 1 || g_rtl433_raw_mode == 3);
+            
+            if (!should_send) {
+                print_logf(LOG_DEBUG, "ASN1", "Skipping signal message due to -Q %d", g_rtl433_raw_mode);
+                return;
+            }
+            
             // Try to get pulse_data if available
             pulse_data_t *pulse_data = NULL;
             
@@ -164,6 +188,10 @@ static void R_API_CALLCONV print_asn1_data(data_output_t *output, data_t *data, 
                     pulse_data,
                     ++asn1_out->package_counter
                 );
+                if (asn1_buffer.result == RTL433_ASN1_OK) {
+                    print_logf(LOG_NOTICE, "ASN1", "Sending ASN.1 signal data to '%s' (pulse_data): %zu bytes", 
+                              target_queue, asn1_buffer.buffer_size);
+                }
             } else {
                 // Fallback: extract basic signal parameters
                 uint32_t frequency = 433920000;  // Default frequency
