@@ -19,11 +19,12 @@ extern "C" {
 #ifdef ENABLE_ASN1
 
 // Forward declarations for ASN.1 structures
-typedef struct RTL433Message RTL433Message_t;
-typedef struct SignalMessage SignalMessage_t;
-typedef struct DetectedMessage DetectedMessage_t;
-typedef struct StatusMessage StatusMessage_t;
-typedef struct ConfigMessage ConfigMessage_t;
+// Note: These will be redefined by generated headers, but we need them for interface
+struct RTL433Message;
+struct SignalMessage;
+struct DetectedMessage;
+struct StatusMessage;
+struct ConfigMessage;
 
 // Error codes for ASN.1 operations
 typedef enum {

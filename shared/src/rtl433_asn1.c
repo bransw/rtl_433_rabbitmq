@@ -322,6 +322,7 @@ void rtl433_asn1_free_buffer(rtl433_asn1_buffer_t *buffer) {
 }
 
 void rtl433_asn1_free_message(void *message, int message_type) {
+    (void)message_type; // Unused parameter
     if (message) {
         ASN_STRUCT_FREE(asn_DEF_RTL433Message, message);
     }
@@ -387,8 +388,8 @@ rtl433_asn1_result_t rtl433_asn1_decode_signal_to_pulse_data(
         pulse_data->num_pulses = (pulses->count < PD_MAX_PULSES) ? pulses->count : PD_MAX_PULSES;
         
         // Copy pulse values
-        for (int i = 0; i < pulse_data->num_pulses; i++) {
-            if (i < pulses->pulses.list.count) {
+        for (unsigned int i = 0; i < pulse_data->num_pulses; i++) {
+            if (i < (unsigned int)pulses->pulses.list.count) {
                 pulse_data->pulse[i] = *(pulses->pulses.list.array[i]);
             }
         }
@@ -455,7 +456,7 @@ rtl433_asn1_buffer_t rtl433_asn1_encode_pulse_data_to_signal(
     pulses->sampleRate = pulse_data->sample_rate;
     
     // Copy pulse data
-    for (int i = 0; i < pulse_data->num_pulses && i < PD_MAX_PULSES; i++) {
+    for (unsigned int i = 0; i < pulse_data->num_pulses && i < PD_MAX_PULSES; i++) {
         long *pulse_val = calloc(1, sizeof(long));
         if (pulse_val) {
             *pulse_val = pulse_data->pulse[i];

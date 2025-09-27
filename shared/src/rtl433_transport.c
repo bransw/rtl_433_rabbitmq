@@ -67,7 +67,7 @@ int rtl433_transport_parse_url(const char *url, rtl433_transport_config_t *confi
     
     // Парсинг URL вида: amqp://user:pass@host:port/queue
     char *url_copy = strdup(url);
-    char *saveptr;
+    // char *saveptr; // Unused variable - removed
     
     // Определение типа транспорта
     char *rest = NULL;
@@ -846,11 +846,13 @@ rtl433_transport_type_t rtl433_transport_type_from_string(const char *type_str)
 
 void rtl433_transport_get_stats(rtl433_transport_connection_t *conn, rtl433_transport_stats_t *stats)
 {
+    (void)conn; // Unused parameter
     if (!stats) return;
     *stats = g_transport_stats;
 }
 
 void rtl433_transport_reset_stats(rtl433_transport_connection_t *conn)
 {
+    (void)conn; // Unused parameter
     memset(&g_transport_stats, 0, sizeof(g_transport_stats));
 }
