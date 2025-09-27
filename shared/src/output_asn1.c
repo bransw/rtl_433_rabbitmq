@@ -30,6 +30,9 @@
 // Include ASN.1 support
 #include "rtl433_asn1.h"
 
+// Global variable to access raw_mode from client
+extern int g_rtl433_raw_mode;
+
 /* ASN.1 RabbitMQ client abstraction */
 
 typedef struct {
@@ -82,14 +85,41 @@ static void R_API_CALLCONV print_asn1_data(data_output_t *output, data_t *data, 
             data_mod = d;
     }
     
-    // Route data based on type
+    // Debug: Print what data we received and all keys
+    print_logf(LOG_NOTICE, "ASN1", "🔍 Data analysis: model=%s, mod=%s, raw_mode=%d", 
+               data_model ? "YES" : "NO", data_mod ? "YES" : "NO", g_rtl433_raw_mode);
+    
+    // Debug: Print all keys in the data structure
+    print_logf(LOG_NOTICE, "ASN1", "📋 All data keys:");
+    for (data_t *d = data; d; d = d->next) {
+        const char *value_str = "N/A";
+        if (d->type == DATA_STRING && d->value.v_ptr) {
+            value_str = (const char*)d->value.v_ptr;
+        } else if (d->type == DATA_INT) {
+            static char int_buf[32];
+            snprintf(int_buf, sizeof(int_buf), "%d", d->value.v_int);
+            value_str = int_buf;
+        }
+        print_logf(LOG_NOTICE, "ASN1", "   - %s = %s (type=%d)", d->key, value_str, d->type);
+    }
+    
+    // Route data based on type and -Q parameter
     if (data_model || data_mod) {
         const char *target_queue = NULL;
         rtl433_asn1_buffer_t asn1_buffer = {0};
+        int should_send = 0;
         
         if (data_model) {
             // This is decoded device data - encode as DetectedMessage
             target_queue = asn1_out->detected_queue;
+            
+            // Check -Q parameter: 0=both, 1=signals only, 2=detected only, 3=both
+            should_send = (g_rtl433_raw_mode == 0 || g_rtl433_raw_mode == 2 || g_rtl433_raw_mode == 3);
+            
+            if (!should_send) {
+                print_logf(LOG_DEBUG, "ASN1", "Skipping detected message due to -Q %d", g_rtl433_raw_mode);
+                return;
+            }
             
             // Extract device information
             const char *model = (data_model->type == DATA_STRING) ? data_model->value.v_ptr : "unknown";
@@ -139,13 +169,21 @@ static void R_API_CALLCONV print_asn1_data(data_output_t *output, data_t *data, 
             );
             
             if (asn1_buffer.result == RTL433_ASN1_OK) {
-                print_logf(LOG_NOTICE, "ASN1", "Sending ASN.1 device data to '%s': %zu bytes", 
+                print_logf(LOG_NOTICE, "ASN1", "📦 DETECTED: Sending ASN.1 device data to '%s': %zu bytes", 
                           target_queue, asn1_buffer.buffer_size);
             }
             
         } else if (data_mod) {
             // This is raw pulse data - encode as SignalMessage
             target_queue = asn1_out->signals_queue;
+            
+            // Check -Q parameter: 0=both, 1=signals only, 2=detected only, 3=both
+            should_send = (g_rtl433_raw_mode == 0 || g_rtl433_raw_mode == 1 || g_rtl433_raw_mode == 3);
+            
+            if (!should_send) {
+                print_logf(LOG_DEBUG, "ASN1", "Skipping signal message due to -Q %d", g_rtl433_raw_mode);
+                return;
+            }
             
             // Try to get pulse_data if available
             pulse_data_t *pulse_data = NULL;
@@ -171,8 +209,10 @@ static void R_API_CALLCONV print_asn1_data(data_output_t *output, data_t *data, 
                 
                 // Extract frequency and modulation from data
                 for (data_t *d = data; d; d = d->next) {
-                    if (strcmp(d->key, "freq") == 0 && d->type == DATA_STRING) {
-                        frequency = (uint32_t)atoi((const char*)d->value.v_ptr);
+                    if (strcmp(d->key, "freq_Hz") == 0 && d->type == DATA_INT) {
+                        frequency = (uint32_t)d->value.v_int;
+                    } else if (strcmp(d->key, "freq1_Hz") == 0 && d->type == DATA_INT) {
+                        frequency = (uint32_t)d->value.v_int;
                     } else if (strcmp(d->key, "mod") == 0 && d->type == DATA_STRING) {
                         if (strcmp((const char*)d->value.v_ptr, "FSK") == 0) {
                             modulation = 1;  // FSK
@@ -180,19 +220,85 @@ static void R_API_CALLCONV print_asn1_data(data_output_t *output, data_t *data, 
                     }
                 }
                 
-                // Use basic signal encoding (without actual signal data)
+                // Extract signal data: hex_string OR pulses array
+                const char *hex_string = NULL;
+                data_array_t *pulses_array = NULL;
+                int count = 0;
+                int sample_rate = 250000;  // Default
+                
+                for (data_t *d = data; d; d = d->next) {
+                    if (strcmp(d->key, "hex_string") == 0 && d->type == DATA_STRING) {
+                        hex_string = (const char*)d->value.v_ptr;
+                    } else if (strcmp(d->key, "pulses") == 0 && d->type == DATA_ARRAY) {
+                        pulses_array = &d->value.v_array;
+                    } else if (strcmp(d->key, "count") == 0 && d->type == DATA_INT) {
+                        count = d->value.v_int;
+                    } else if (strcmp(d->key, "rate_Hz") == 0 && d->type == DATA_INT) {
+                        sample_rate = d->value.v_int;
+                    }
+                }
+                
+                // Prefer hex_string, fallback to pulses array
+                size_t hex_len = 0;
+                int *pulses_data = NULL;
+                int pulses_count = 0;
+                
+                if (hex_string && strlen(hex_string) > 0) {
+                    // Use hex_string as-is ('+' separators are part of the data format)
+                    hex_len = strlen(hex_string);
+                    if (hex_len > 512) {
+                        hex_len = 512;
+                        print_logf(LOG_WARNING, "ASN1", "⚠️ Hex string truncated from %zu to 512 chars", strlen(hex_string));
+                    }
+                    print_logf(LOG_NOTICE, "ASN1", "🔧 Encoding signal with hex_string: freq=%u, mod=%d, hex_len=%zu", 
+                              frequency, modulation, hex_len);
+                } else if (pulses_array && count > 0) {
+                    // Use pulses array
+                    pulses_count = count * 2;  // pulse + gap pairs
+                    if (pulses_count > pulses_array->num_values) {
+                        pulses_count = pulses_array->num_values;
+                    }
+                    
+                    pulses_data = malloc(pulses_count * sizeof(int));
+                    if (pulses_data) {
+                        for (int i = 0; i < pulses_count; i++) {
+                            pulses_data[i] = pulses_array->values[i].v_int;
+                        }
+                    }
+                    print_logf(LOG_NOTICE, "ASN1", "🔧 Encoding signal with pulses: freq=%u, mod=%d, count=%d, rate=%d", 
+                              frequency, modulation, count, sample_rate);
+                } else {
+                    print_logf(LOG_WARNING, "ASN1", "⚠️ No hex_string or pulses data available");
+                }
+                
+                // Convert hex string to binary data if available
+                uint8_t *binary_data = NULL;
+                size_t binary_len = 0;
+                
+                if (hex_string && hex_len > 0) {
+                    // For now, pass hex_string as-is (it contains '+' separators)
+                    // The ASN.1 encoder will handle it as raw bytes
+                    binary_data = (uint8_t*)hex_string;
+                    binary_len = hex_len;
+                }
+                
                 asn1_buffer = rtl433_asn1_encode_signal(
                     ++asn1_out->package_counter,  // package_id
                     NULL,                         // timestamp
-                    NULL, 0,                      // hex_string (none)
-                    NULL, 0, 0,                   // pulses_data (none)
+                    binary_data, binary_len,      // hex_string as binary data
+                    pulses_data, pulses_count, sample_rate,  // pulses_data (if available)
                     modulation,
                     frequency
                 );
+                
+                // Free allocated memory
+                if (pulses_data) {
+                    free(pulses_data);
+                }
             }
             
             if (asn1_buffer.result == RTL433_ASN1_OK) {
-                print_logf(LOG_NOTICE, "ASN1", "Sending ASN.1 signal data to '%s': %zu bytes", 
+                print_logf(LOG_NOTICE, "ASN1", "📡 SIGNAL: Sending ASN.1 signal data to '%s': %zu bytes", 
                           target_queue, asn1_buffer.buffer_size);
             }
         }
