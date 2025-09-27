@@ -30,9 +30,6 @@
 // Include ASN.1 support
 #include "rtl433_asn1.h"
 
-// Global variable to access raw_mode from client
-extern int g_rtl433_raw_mode;
-
 /* ASN.1 RabbitMQ client abstraction */
 
 typedef struct {
@@ -59,18 +56,18 @@ static void R_API_CALLCONV print_asn1_array(data_output_t *output, data_array_t 
 static void R_API_CALLCONV print_asn1_data(data_output_t *output, data_t *data, char const *format)
 {
     UNUSED(format);
-    
-    print_logf(LOG_NOTICE, "ASN1", "print_asn1_data called");
-    
+
+    print_logf(LOG_NOTICE, "ASN1", "🔄 print_asn1_data called!");
+
     if (!output || !data) {
         print_logf(LOG_ERROR, "ASN1", "NULL parameters: output=%p, data=%p", output, data);
         return;
     }
-    
+
     data_output_asn1_t *asn1_out = (data_output_asn1_t *)output;
-    
+
     if (!asn1_out || !asn1_out->connected) {
-        print_logf(LOG_ERROR, "ASN1", "ASN.1 output not ready: asn1_out=%p, connected=%d", 
+        print_logf(LOG_ERROR, "ASN1", "Not connected: asn1_out=%p, connected=%d", 
                    asn1_out, asn1_out ? asn1_out->connected : 0);
         return;
     }
@@ -79,66 +76,6 @@ static void R_API_CALLCONV print_asn1_data(data_output_t *output, data_t *data, 
     print_logf(LOG_ERROR, "ASN1", "ASN.1 support not compiled in");
     return;
 #endif
-    
-    print_logf(LOG_NOTICE, "ASN1", "ASN.1 processing data...");
-    
-    // TEMPORARY: Send test messages to both queues to verify ASN.1 output works
-    // This bypasses -Q parameter logic for testing
-    static int test_counter = 0;
-    test_counter++;
-    
-    if (test_counter <= 3) { // Send only first 3 messages for testing
-        // Send test signal message
-        rtl433_asn1_buffer_t signal_buffer = rtl433_asn1_encode_signal(
-            test_counter,           // package_id
-            NULL,                   // timestamp
-            "TEST_HEX_DATA", 14,    // hex_string
-            NULL, 0, 0,             // pulses_data (none)
-            0,                      // modulation (OOK)
-            433920000               // frequency
-        );
-        
-        if (signal_buffer.result == RTL433_ASN1_OK && signal_buffer.buffer) {
-            int result = rtl433_transport_send_binary_to_queue(&asn1_out->conn, 
-                                                             signal_buffer.buffer, 
-                                                             signal_buffer.buffer_size,
-                                                             asn1_out->signals_queue);
-            if (result == 0) {
-                print_logf(LOG_NOTICE, "ASN1", "✅ TEST: Sent signal message #%d to '%s': %zu bytes", 
-                          test_counter, asn1_out->signals_queue, signal_buffer.buffer_size);
-            } else {
-                print_logf(LOG_ERROR, "ASN1", "❌ TEST: Failed to send signal message #%d", test_counter);
-            }
-            rtl433_asn1_free_buffer(&signal_buffer);
-        }
-        
-        // Send test detected message
-        const char *test_fields[] = {"temperature", "25.5", "humidity", "60", NULL};
-        rtl433_asn1_buffer_t detected_buffer = rtl433_asn1_encode_detected(
-            test_counter + 100,     // package_id
-            NULL,                   // timestamp
-            "TEST_DEVICE",          // model
-            "sensor",               // device_type
-            "test_001",             // device_id
-            "test_protocol",        // protocol
-            test_fields,            // data_fields
-            4                       // field_count
-        );
-        
-        if (detected_buffer.result == RTL433_ASN1_OK && detected_buffer.buffer) {
-            int result = rtl433_transport_send_binary_to_queue(&asn1_out->conn, 
-                                                             detected_buffer.buffer, 
-                                                             detected_buffer.buffer_size,
-                                                             asn1_out->detected_queue);
-            if (result == 0) {
-                print_logf(LOG_NOTICE, "ASN1", "✅ TEST: Sent detected message #%d to '%s': %zu bytes", 
-                          test_counter, asn1_out->detected_queue, detected_buffer.buffer_size);
-            } else {
-                print_logf(LOG_ERROR, "ASN1", "❌ TEST: Failed to send detected message #%d", test_counter);
-            }
-            rtl433_asn1_free_buffer(&detected_buffer);
-        }
-    }
     
     // Check if this has data we want to send
     data_t *data_model = NULL;
@@ -150,156 +87,14 @@ static void R_API_CALLCONV print_asn1_data(data_output_t *output, data_t *data, 
             data_mod = d;
     }
     
-    // Debug: Print what data we received
-    print_logf(LOG_DEBUG, "ASN1", "Received data - model: %s, mod: %s", 
-               data_model ? "YES" : "NO", data_mod ? "YES" : "NO");
-    
-    // Route data based on type and -Q parameter
+    // Route data based on type
     if (data_model || data_mod) {
         const char *target_queue = NULL;
         rtl433_asn1_buffer_t asn1_buffer = {0};
-        int should_send = 0;
         
-        if (data_mod && !data_model) {
-            // This is raw pulse data (mod without model) - encode as SignalMessage
-            target_queue = asn1_out->signals_queue;
-            
-            // Check -Q parameter: 0=both, 1=signals only, 2=detected only, 3=both
-            should_send = (g_rtl433_raw_mode == 0 || g_rtl433_raw_mode == 1 || g_rtl433_raw_mode == 3);
-            
-            if (!should_send) {
-                print_logf(LOG_DEBUG, "ASN1", "Skipping signal message due to -Q %d", g_rtl433_raw_mode);
-                return;
-            }
-            
-            // Try to get pulse_data if available
-            pulse_data_t *pulse_data = NULL;
-            
-            // Look for pulse_data in the data structure
-            for (data_t *d = data; d; d = d->next) {
-                if (strcmp(d->key, "pulse_data") == 0 && d->type == DATA_DATA) {
-                    pulse_data = (pulse_data_t*)d->value.v_ptr;
-                    break;
-                }
-            }
-            
-            if (pulse_data) {
-                // Use direct pulse_data encoding
-                asn1_buffer = rtl433_asn1_encode_pulse_data_to_signal(
-                    pulse_data,
-                    ++asn1_out->package_counter
-                );
-                if (asn1_buffer.result == RTL433_ASN1_OK) {
-                    print_logf(LOG_NOTICE, "ASN1", "Sending ASN.1 signal data to '%s' (pulse_data): %zu bytes", 
-                              target_queue, asn1_buffer.buffer_size);
-                }
-            } else {
-                // Fallback: extract basic signal parameters
-                uint32_t frequency = 433920000;  // Default frequency
-                int modulation = 0;  // Default to OOK
-                
-                // Extract frequency and modulation from data
-                for (data_t *d = data; d; d = d->next) {
-                    if (strcmp(d->key, "freq") == 0 && d->type == DATA_STRING) {
-                        frequency = (uint32_t)atoi((const char*)d->value.v_ptr);
-                    } else if (strcmp(d->key, "mod") == 0 && d->type == DATA_STRING) {
-                        if (strcmp((const char*)d->value.v_ptr, "FSK") == 0) {
-                            modulation = 1;  // FSK
-                        }
-                    }
-                }
-                
-                // Use basic signal encoding (without actual signal data)
-                asn1_buffer = rtl433_asn1_encode_signal(
-                    ++asn1_out->package_counter,  // package_id
-                    NULL,                         // timestamp
-                    NULL, 0,                      // hex_string (none)
-                    NULL, 0, 0,                   // pulses_data (none)
-                    modulation,
-                    frequency
-                );
-                if (asn1_buffer.result == RTL433_ASN1_OK) {
-                    print_logf(LOG_NOTICE, "ASN1", "Sending ASN.1 signal data to '%s' (basic): %zu bytes", 
-                              target_queue, asn1_buffer.buffer_size);
-                }
-            }
-            
-        } else if (data_mod) {
-            // This is raw pulse data - encode as SignalMessage
-            target_queue = asn1_out->signals_queue;
-            
-            // Check -Q parameter: 0=both, 1=signals only, 2=detected only, 3=both
-            should_send = (g_rtl433_raw_mode == 0 || g_rtl433_raw_mode == 1 || g_rtl433_raw_mode == 3);
-            
-            if (!should_send) {
-                print_logf(LOG_DEBUG, "ASN1", "Skipping signal message due to -Q %d", g_rtl433_raw_mode);
-                return;
-            }
-            
-            // Try to get pulse_data if available
-            pulse_data_t *pulse_data = NULL;
-            
-            // Look for pulse_data in the data structure
-            for (data_t *d = data; d; d = d->next) {
-                if (strcmp(d->key, "pulse_data") == 0 && d->type == DATA_DATA) {
-                    pulse_data = (pulse_data_t*)d->value.v_ptr;
-                    break;
-                }
-            }
-            
-            if (pulse_data) {
-                // Use direct pulse_data encoding
-                asn1_buffer = rtl433_asn1_encode_pulse_data_to_signal(
-                    pulse_data,
-                    ++asn1_out->package_counter
-                );
-                if (asn1_buffer.result == RTL433_ASN1_OK) {
-                    print_logf(LOG_NOTICE, "ASN1", "Sending ASN.1 signal data to '%s' (pulse_data): %zu bytes", 
-                              target_queue, asn1_buffer.buffer_size);
-                }
-            } else {
-                // Fallback: extract basic signal parameters
-                uint32_t frequency = 433920000;  // Default frequency
-                int modulation = 0;  // Default to OOK
-                
-                // Extract frequency and modulation from data
-                for (data_t *d = data; d; d = d->next) {
-                    if (strcmp(d->key, "freq") == 0 && d->type == DATA_STRING) {
-                        frequency = (uint32_t)atoi((const char*)d->value.v_ptr);
-                    } else if (strcmp(d->key, "mod") == 0 && d->type == DATA_STRING) {
-                        if (strcmp((const char*)d->value.v_ptr, "FSK") == 0) {
-                            modulation = 1;  // FSK
-                        }
-                    }
-                }
-                
-                // Use basic signal encoding (without actual signal data)
-                asn1_buffer = rtl433_asn1_encode_signal(
-                    ++asn1_out->package_counter,  // package_id
-                    NULL,                         // timestamp
-                    NULL, 0,                      // hex_string (none)
-                    NULL, 0, 0,                   // pulses_data (none)
-                    modulation,
-                    frequency
-                );
-            }
-            
-            if (asn1_buffer.result == RTL433_ASN1_OK) {
-                print_logf(LOG_NOTICE, "ASN1", "Sending ASN.1 signal data to '%s': %zu bytes", 
-                          target_queue, asn1_buffer.buffer_size);
-            }
-            
-        } else if (data_model) {
+        if (data_model) {
             // This is decoded device data - encode as DetectedMessage
             target_queue = asn1_out->detected_queue;
-            
-            // Check -Q parameter: 0=both, 1=signals only, 2=detected only, 3=both
-            should_send = (g_rtl433_raw_mode == 0 || g_rtl433_raw_mode == 2 || g_rtl433_raw_mode == 3);
-            
-            if (!should_send) {
-                print_logf(LOG_DEBUG, "ASN1", "Skipping detected message due to -Q %d", g_rtl433_raw_mode);
-                return;
-            }
             
             // Extract device information
             const char *model = (data_model->type == DATA_STRING) ? data_model->value.v_ptr : "unknown";
@@ -350,6 +145,59 @@ static void R_API_CALLCONV print_asn1_data(data_output_t *output, data_t *data, 
             
             if (asn1_buffer.result == RTL433_ASN1_OK) {
                 print_logf(LOG_NOTICE, "ASN1", "Sending ASN.1 device data to '%s': %zu bytes", 
+                          target_queue, asn1_buffer.buffer_size);
+            }
+            
+        } else if (data_mod) {
+            // This is raw pulse data - encode as SignalMessage
+            target_queue = asn1_out->signals_queue;
+            
+            // Try to get pulse_data if available
+            pulse_data_t *pulse_data = NULL;
+            
+            // Look for pulse_data in the data structure
+            for (data_t *d = data; d; d = d->next) {
+                if (strcmp(d->key, "pulse_data") == 0 && d->type == DATA_DATA) {
+                    pulse_data = (pulse_data_t*)d->value.v_ptr;
+                    break;
+                }
+            }
+            
+            if (pulse_data) {
+                // Use direct pulse_data encoding
+                asn1_buffer = rtl433_asn1_encode_pulse_data_to_signal(
+                    pulse_data,
+                    ++asn1_out->package_counter
+                );
+            } else {
+                // Fallback: extract basic signal parameters
+                uint32_t frequency = 433920000;  // Default frequency
+                int modulation = 0;  // Default to OOK
+                
+                // Extract frequency and modulation from data
+                for (data_t *d = data; d; d = d->next) {
+                    if (strcmp(d->key, "freq") == 0 && d->type == DATA_STRING) {
+                        frequency = (uint32_t)atoi((const char*)d->value.v_ptr);
+                    } else if (strcmp(d->key, "mod") == 0 && d->type == DATA_STRING) {
+                        if (strcmp((const char*)d->value.v_ptr, "FSK") == 0) {
+                            modulation = 1;  // FSK
+                        }
+                    }
+                }
+                
+                // Use basic signal encoding (without actual signal data)
+                asn1_buffer = rtl433_asn1_encode_signal(
+                    ++asn1_out->package_counter,  // package_id
+                    NULL,                         // timestamp
+                    NULL, 0,                      // hex_string (none)
+                    NULL, 0, 0,                   // pulses_data (none)
+                    modulation,
+                    frequency
+                );
+            }
+            
+            if (asn1_buffer.result == RTL433_ASN1_OK) {
+                print_logf(LOG_NOTICE, "ASN1", "Sending ASN.1 signal data to '%s': %zu bytes", 
                           target_queue, asn1_buffer.buffer_size);
             }
         }
@@ -418,15 +266,7 @@ static void R_API_CALLCONV data_output_asn1_free(data_output_t *output)
 
 void add_asn1_output(struct r_cfg *cfg, char *param)
 {
-    print_logf(LOG_NOTICE, "ASN1", "add_asn1_output called with param: %s", param ? param : "(null)");
-    
-    struct data_output *output = data_output_asn1_create(get_mgr(cfg), param, cfg->dev_query);
-    if (output) {
-        list_push(&cfg->output_handler, output);
-        print_logf(LOG_NOTICE, "ASN1", "ASN.1 output successfully added to handler list");
-    } else {
-        print_logf(LOG_ERROR, "ASN1", "Failed to create ASN.1 output - returned NULL");
-    }
+    list_push(&cfg->output_handler, data_output_asn1_create(get_mgr(cfg), param, cfg->dev_query));
 }
 
 struct data_output *data_output_asn1_create(struct mg_mgr *mgr, char *param, char const *dev_hint)
@@ -434,14 +274,12 @@ struct data_output *data_output_asn1_create(struct mg_mgr *mgr, char *param, cha
     UNUSED(mgr); // We don't use mongoose for ASN.1 RabbitMQ
     UNUSED(dev_hint); // We don't use dev_hint for now
     
-    print_logf(LOG_NOTICE, "ASN1", "data_output_asn1_create called");
-    
 #ifndef ENABLE_ASN1
     print_logf(LOG_ERROR, "ASN1", "ASN.1 support not compiled in");
     return NULL;
 #endif
     
-    print_logf(LOG_NOTICE, "ASN1", "Creating ASN.1 output with param: %s", param ? param : "(null)");
+    print_logf(LOG_DEBUG, "ASN1", "Creating ASN.1 output with param: %s", param ? param : "(null)");
     
     data_output_asn1_t *asn1_out = calloc(1, sizeof(data_output_asn1_t));
     if (!asn1_out)
@@ -547,62 +385,6 @@ struct data_output *data_output_asn1_create(struct mg_mgr *mgr, char *param, cha
     asn1_out->output.output_free  = data_output_asn1_free;
     
     print_logf(LOG_DEBUG, "ASN1", "ASN.1 output created successfully");
-    
-    // TEMPORARY: Send test messages immediately to verify ASN.1 output works
-    if (asn1_out->connected) {
-        print_logf(LOG_NOTICE, "ASN1", "Sending test messages to verify ASN.1 functionality...");
-        
-        // Send test signal message
-        rtl433_asn1_buffer_t signal_buffer = rtl433_asn1_encode_signal(
-            999,                    // package_id
-            NULL,                   // timestamp
-            "DEADBEEF", 8,          // hex_string
-            NULL, 0, 0,             // pulses_data (none)
-            0,                      // modulation (OOK)
-            433920000               // frequency
-        );
-        
-        if (signal_buffer.result == RTL433_ASN1_OK && signal_buffer.buffer) {
-            int result = rtl433_transport_send_binary_to_queue(&asn1_out->conn, 
-                                                             signal_buffer.buffer, 
-                                                             signal_buffer.buffer_size,
-                                                             asn1_out->signals_queue);
-            if (result == 0) {
-                print_logf(LOG_NOTICE, "ASN1", "✅ TEST: Sent test signal message to '%s': %zu bytes", 
-                          asn1_out->signals_queue, signal_buffer.buffer_size);
-            } else {
-                print_logf(LOG_ERROR, "ASN1", "❌ TEST: Failed to send test signal message");
-            }
-            rtl433_asn1_free_buffer(&signal_buffer);
-        }
-        
-        // Send test detected message
-        const char *test_fields[] = {"temperature", "22.5", "battery", "OK", NULL};
-        rtl433_asn1_buffer_t detected_buffer = rtl433_asn1_encode_detected(
-            888,                    // package_id
-            NULL,                   // timestamp
-            "TEST_SENSOR",          // model
-            "temperature",          // device_type
-            "sensor_123",           // device_id
-            "test_proto",           // protocol
-            test_fields,            // data_fields
-            4                       // field_count
-        );
-        
-        if (detected_buffer.result == RTL433_ASN1_OK && detected_buffer.buffer) {
-            int result = rtl433_transport_send_binary_to_queue(&asn1_out->conn, 
-                                                             detected_buffer.buffer, 
-                                                             detected_buffer.buffer_size,
-                                                             asn1_out->detected_queue);
-            if (result == 0) {
-                print_logf(LOG_NOTICE, "ASN1", "✅ TEST: Sent test detected message to '%s': %zu bytes", 
-                          asn1_out->detected_queue, detected_buffer.buffer_size);
-            } else {
-                print_logf(LOG_ERROR, "ASN1", "❌ TEST: Failed to send test detected message");
-            }
-            rtl433_asn1_free_buffer(&detected_buffer);
-        }
-    }
     
     return (struct data_output *)asn1_out;
 }
