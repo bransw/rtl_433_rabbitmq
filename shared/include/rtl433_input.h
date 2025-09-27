@@ -10,6 +10,7 @@
 
 #include "rtl433_transport.h"
 #include "pulse_data.h"
+#include "rtl433_asn1.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -37,6 +38,13 @@ int rtl433_input_init_from_url(rtl433_input_config_t *input_config,
                                rtl433_input_pulse_handler_t pulse_handler,
                                void *user_data);
 
+/// Initialize ASN.1 input from URL
+/// URL format: asn1://user:pass@host:port/queue_name
+int rtl433_input_init_asn1_from_url(rtl433_input_config_t *input_config, 
+                                    const char *url,
+                                    rtl433_input_pulse_handler_t pulse_handler,
+                                    void *user_data);
+
 /// Start reading messages from RabbitMQ queue
 int rtl433_input_start_reading(rtl433_input_config_t *input_config);
 
@@ -59,6 +67,12 @@ pulse_data_t* rtl433_input_parse_pulse_data_from_json(const char *json_str);
 
 /// Convert received message to pulse_data
 pulse_data_t* rtl433_input_message_to_pulse_data(rtl433_message_t *message);
+
+/// Parse pulse data from ASN.1 binary message
+pulse_data_t* rtl433_input_parse_pulse_data_from_asn1(const uint8_t *asn1_data, size_t data_size);
+
+/// Check if URL is an ASN.1 input URL
+bool rtl433_input_is_asn1_url(const char *url);
 
 #ifdef __cplusplus
 }

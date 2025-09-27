@@ -380,3 +380,220 @@ static int json_to_pulse_data(json_object *json_obj, pulse_data_t *pulse_data)
 
     return 0;
 }
+
+// === ASN.1 INPUT FUNCTIONS ===
+
+bool rtl433_input_is_asn1_url(const char *url)
+{
+    return url && strncmp(url, "asn1://", 7) == 0;
+}
+
+/// Internal ASN.1 message handler
+static void internal_asn1_message_handler(rtl433_message_t *message, void *user_data);
+
+int rtl433_input_init_asn1_from_url(rtl433_input_config_t *input_config, 
+                                    const char *url,
+                                    rtl433_input_pulse_handler_t pulse_handler,
+                                    void *user_data)
+{
+    if (!input_config || !url || !pulse_handler) {
+        printf("❌ Invalid parameters for ASN.1 input initialization\n");
+        return -1;
+    }
+
+#ifndef ENABLE_ASN1
+    printf("❌ ASN.1 support not compiled in\n");
+    return -1;
+#endif
+
+    printf("📦 Initializing ASN.1 input from URL: %s\n", url);
+
+    // Initialize input config
+    memset(input_config, 0, sizeof(rtl433_input_config_t));
+    
+    // Allocate connection
+    input_config->conn = malloc(sizeof(rtl433_transport_connection_t));
+    if (!input_config->conn) {
+        printf("❌ Failed to allocate transport connection\n");
+        return -1;
+    }
+    memset(input_config->conn, 0, sizeof(rtl433_transport_connection_t));
+
+    // Allocate transport config
+    rtl433_transport_config_t *config = malloc(sizeof(rtl433_transport_config_t));
+    if (!config) {
+        printf("❌ Failed to allocate transport config\n");
+        free(input_config->conn);
+        return -1;
+    }
+
+    // Initialize and parse URL
+    if (rtl433_transport_config_init(config) != 0) {
+        printf("❌ Failed to initialize transport config\n");
+        free(config);
+        free(input_config->conn);
+        return -1;
+    }
+
+    // Convert asn1:// to amqp:// for transport layer
+    char converted_url[512];
+    strncpy(converted_url, url, sizeof(converted_url) - 1);
+    converted_url[sizeof(converted_url) - 1] = '\0';
+    
+    // Replace "asn1://" with "amqp://"
+    if (strncmp(converted_url, "asn1://", 7) == 0) {
+        memmove(converted_url, converted_url + 4, strlen(converted_url + 4) + 1); // Remove "asn1"
+        memmove(converted_url + 4, converted_url, strlen(converted_url) + 1);     // Make space for "amqp"
+        memcpy(converted_url, "amqp", 4);                                         // Insert "amqp"
+    }
+
+    if (rtl433_transport_parse_url(converted_url, config) != 0) {
+        printf("❌ Failed to parse ASN.1 URL: %s\n", url);
+        rtl433_transport_config_free(config);
+        free(config);
+        free(input_config->conn);
+        return -1;
+    }
+
+    // Store queue name
+    if (config->queue) {
+        input_config->queue_name = strdup(config->queue);
+        printf("📥 Target ASN.1 queue: %s\n", input_config->queue_name);
+    } else {
+        printf("❌ No queue specified in ASN.1 URL\n");
+        rtl433_transport_config_free(config);
+        free(config);
+        free(input_config->conn);
+        return -1;
+    }
+
+    // Connect to RabbitMQ
+    if (rtl433_transport_connect(input_config->conn, config) != 0) {
+        printf("❌ Failed to connect to RabbitMQ for ASN.1 input\n");
+        rtl433_transport_config_free(config);
+        free(config);
+        free(input_config->queue_name);
+        free(input_config->conn);
+        return -1;
+    }
+
+    printf("✅ Connected to RabbitMQ for ASN.1 input\n");
+
+    // Store handlers and user data
+    input_config->running = false;
+    input_config->timeout_ms = 1000; // 1 second timeout
+
+    // Create a wrapper to handle ASN.1 decoding
+    typedef struct {
+        rtl433_input_pulse_handler_t original_handler;
+        void *original_user_data;
+    } asn1_handler_context_t;
+
+    asn1_handler_context_t *context = malloc(sizeof(asn1_handler_context_t));
+    if (!context) {
+        printf("❌ Failed to allocate ASN.1 handler context\n");
+        rtl433_transport_disconnect(input_config->conn);
+        rtl433_transport_config_free(config);
+        free(config);
+        free(input_config->queue_name);
+        free(input_config->conn);
+        return -1;
+    }
+    
+    context->original_handler = pulse_handler;
+    context->original_user_data = user_data;
+
+    // Set up message handler for ASN.1 messages
+    input_config->message_handler = internal_asn1_message_handler;
+    input_config->user_data = context;
+
+    // Cleanup config (connection is stored in input_config)
+    rtl433_transport_config_free(config);
+    free(config);
+
+    printf("📦 ASN.1 input initialized successfully\n");
+    return 0;
+}
+
+pulse_data_t* rtl433_input_parse_pulse_data_from_asn1(const uint8_t *asn1_data, size_t data_size)
+{
+    if (!asn1_data || data_size == 0) {
+        printf("❌ Invalid ASN.1 data for parsing\n");
+        return NULL;
+    }
+
+#ifndef ENABLE_ASN1
+    printf("❌ ASN.1 support not compiled in\n");
+    return NULL;
+#endif
+
+    // Allocate pulse_data structure
+    pulse_data_t *pulse_data = calloc(1, sizeof(pulse_data_t));
+    if (!pulse_data) {
+        printf("❌ Failed to allocate pulse_data structure\n");
+        return NULL;
+    }
+
+    // Use ASN.1 decoding function to reconstruct pulse_data
+    rtl433_asn1_result_t result = rtl433_asn1_decode_signal_to_pulse_data(
+        asn1_data, data_size, pulse_data);
+
+    if (result != RTL433_ASN1_OK) {
+        printf("❌ Failed to decode ASN.1 signal data: %d\n", result);
+        free(pulse_data);
+        return NULL;
+    }
+
+    printf("✅ Successfully decoded ASN.1 signal: %u pulses, %.0f Hz\n", 
+           pulse_data->num_pulses, pulse_data->freq1_hz);
+
+    return pulse_data;
+}
+
+/// Internal ASN.1 message handler
+static void internal_asn1_message_handler(rtl433_message_t *message, void *user_data)
+{
+    if (!message || !user_data) {
+        printf("❌ Invalid message or user data in ASN.1 handler\n");
+        return;
+    }
+
+    typedef struct {
+        rtl433_input_pulse_handler_t original_handler;
+        void *original_user_data;
+    } asn1_handler_context_t;
+
+    asn1_handler_context_t *context = (asn1_handler_context_t*)user_data;
+
+    printf("📦 Received ASN.1 message: %zu bytes\n", strlen(message->hex_string));
+
+    // Convert hex string to binary data
+    size_t hex_len = strlen(message->hex_string);
+    size_t bin_len = hex_len / 2;
+    uint8_t *binary_data = malloc(bin_len);
+    
+    if (!binary_data) {
+        printf("❌ Failed to allocate binary data buffer\n");
+        return;
+    }
+
+    // Convert hex string to binary
+    for (size_t i = 0; i < bin_len; i++) {
+        sscanf(message->hex_string + 2*i, "%2hhx", &binary_data[i]);
+    }
+
+    // Parse ASN.1 binary data to pulse_data
+    pulse_data_t *pulse_data = rtl433_input_parse_pulse_data_from_asn1(binary_data, bin_len);
+    
+    free(binary_data);
+
+    if (pulse_data) {
+        // Call the original handler with decoded pulse data
+        context->original_handler(pulse_data, context->original_user_data);
+        
+        // Free the pulse data (handler should have processed it)
+        free(pulse_data);
+    } else {
+        printf("❌ Failed to parse ASN.1 pulse data\n");
+    }
+}

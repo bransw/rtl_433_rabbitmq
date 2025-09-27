@@ -1125,7 +1125,7 @@ static void parse_conf_option(r_cfg_t *cfg, int opt, char *arg)
         if (!arg)
             help_read();
 
-        // Check if this is RabbitMQ URL
+        // Check if this is RabbitMQ or ASN.1 URL
         if (strncmp(arg, "rabbitmq://", 11) == 0 || strncmp(arg, "amqp://", 7) == 0) {
             // Store RabbitMQ input URL
             if (g_rabbitmq_input_url) {
@@ -1133,6 +1133,13 @@ static void parse_conf_option(r_cfg_t *cfg, int opt, char *arg)
             }
             g_rabbitmq_input_url = strdup(arg);
             fprintf(stderr, "🐰 RabbitMQ input configured: %s\n", arg);
+        } else if (strncmp(arg, "asn1://", 7) == 0) {
+            // Store ASN.1 input URL
+            if (g_rabbitmq_input_url) {
+                free(g_rabbitmq_input_url);
+            }
+            g_rabbitmq_input_url = strdup(arg);
+            fprintf(stderr, "📦 ASN.1 input configured: %s\n", arg);
         } else {
             // Regular file input
             add_infile(cfg, arg);
@@ -2195,13 +2202,23 @@ int main(int argc, char **argv) {
             register_all_protocols(cfg, 0); // register all defaults
         }
         
-        // Initialize RabbitMQ input
+        // Initialize RabbitMQ or ASN.1 input
         rtl433_input_config_t input_config;
         
-        if (rtl433_input_init_from_url(&input_config, g_rabbitmq_input_url, 
-                                       rabbitmq_pulse_handler, cfg) != 0) {
-            fprintf(stderr, "Failed to initialize RabbitMQ input from URL: %s\n", g_rabbitmq_input_url);
-            return -1;
+        if (strncmp(g_rabbitmq_input_url, "asn1://", 7) == 0) {
+            // ASN.1 input
+            if (rtl433_input_init_asn1_from_url(&input_config, g_rabbitmq_input_url, 
+                                               rabbitmq_pulse_handler, cfg) != 0) {
+                fprintf(stderr, "Failed to initialize ASN.1 input from URL: %s\n", g_rabbitmq_input_url);
+                return -1;
+            }
+        } else {
+            // RabbitMQ JSON input
+            if (rtl433_input_init_from_url(&input_config, g_rabbitmq_input_url, 
+                                           rabbitmq_pulse_handler, cfg) != 0) {
+                fprintf(stderr, "Failed to initialize RabbitMQ input from URL: %s\n", g_rabbitmq_input_url);
+                return -1;
+            }
         }
         
         // Start reading messages in a loop (similar to SDR mode)
