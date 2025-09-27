@@ -1458,16 +1458,16 @@ static void parse_conf_option(r_cfg_t *cfg, int opt, char *arg)
             cfg->raw_mode = atoi(arg);  // Parse raw mode
         else
             cfg->raw_mode = 0;  // Default: send to both queues
-        
+
         // Validate raw_mode values
         if (cfg->raw_mode < 0 || cfg->raw_mode > 3) {
             fprintf(stderr, "Invalid -Q value: %d. Valid values: 0 (both queues), 1 (signals only), 2 (detected only), 3 (both queues)\n", cfg->raw_mode);
             exit(1);
         }
-        
+
         // Update global variable for output modules
         g_rtl433_raw_mode = cfg->raw_mode;
-        
+
         const char* mode_desc[] = {"both queues", "signals only", "detected only", "both queues"};
         print_logf(LOG_INFO, "Config", "Queue routing mode: %d (%s)", cfg->raw_mode, mode_desc[cfg->raw_mode]);
         break;

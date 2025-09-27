@@ -84,23 +84,23 @@ static void R_API_CALLCONV print_rabbitmq_data(data_output_t *output, data_t *da
     // Route data based on type and -Q parameter
     if (data_model || data_mod) {
         int should_send = 0;
-        
-        if (data_mod && !data_model) {
-            // This is raw pulse data (mod without model)
-            // Check -Q parameter: 0=both, 1=signals only, 2=detected only, 3=both
-            should_send = (g_rtl433_raw_mode == 0 || g_rtl433_raw_mode == 1 || g_rtl433_raw_mode == 3);
-            
-            if (!should_send) {
-                print_logf(LOG_DEBUG, "RabbitMQ", "Skipping signal message due to -Q %d", g_rtl433_raw_mode);
-                return;
-            }
-        } else if (data_model) {
+
+        if (data_model) {
             // This is decoded device data
             // Check -Q parameter: 0=both, 1=signals only, 2=detected only, 3=both
             should_send = (g_rtl433_raw_mode == 0 || g_rtl433_raw_mode == 2 || g_rtl433_raw_mode == 3);
-            
+
             if (!should_send) {
                 print_logf(LOG_DEBUG, "RabbitMQ", "Skipping detected message due to -Q %d", g_rtl433_raw_mode);
+                return;
+            }
+        } else if (data_mod) {
+            // This is raw pulse data
+            // Check -Q parameter: 0=both, 1=signals only, 2=detected only, 3=both
+            should_send = (g_rtl433_raw_mode == 0 || g_rtl433_raw_mode == 1 || g_rtl433_raw_mode == 3);
+
+            if (!should_send) {
+                print_logf(LOG_DEBUG, "RabbitMQ", "Skipping signal message due to -Q %d", g_rtl433_raw_mode);
                 return;
             }
         }
