@@ -147,6 +147,13 @@ rtl433_asn1_buffer_t rtl433_asn1_encode_pulse_data_to_signal(
 );
 
 /**
+ * @brief Free ASN.1 buffer allocated by encoding functions
+ * 
+ * @param buffer Buffer to free
+ */
+void rtl433_asn1_free_buffer(rtl433_asn1_buffer_t *buffer);
+
+/**
  * @brief Get ASN.1 library version information
  * 
  * @return Version string

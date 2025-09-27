@@ -40,11 +40,13 @@ endif()
 include_directories(../include)
 include_directories(.)
 
+# Add shared library support
+add_subdirectory(../shared shared_build)
+include_directories(${RTL433_SHARED_INCLUDE_DIR})
+
 # Source files for client
 set(CLIENT_SOURCES
-    src/rtl_433_client.c
-    src/client_transport.c
-    src/client_config.c
+    src/rtl_433_client_new.c
     
     # Copy necessary files from main project
     ../src/sdr.c
@@ -80,6 +82,7 @@ add_executable(rtl_433_client ${CLIENT_SOURCES})
 
 # Link libraries
 target_link_libraries(rtl_433_client 
+    ${RTL433_SHARED_LIBRARIES}
     ${LIBRTLSDR_LIBRARIES}
     ${JSON_C_LIBRARIES}
     ${CURL_LIBRARIES}

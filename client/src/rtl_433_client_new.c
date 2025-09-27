@@ -56,6 +56,7 @@
 #include "mongoose.h"
 #include "rtl433_input.h"
 #include "output_rabbitmq.h"
+#include "output_asn1.h"
 
 #ifdef _WIN32
 #include <io.h>
@@ -1337,6 +1338,11 @@ static void parse_conf_option(r_cfg_t *cfg, int opt, char *arg)
             add_rabbitmq_output(cfg, arg);
             g_rabbitmq_output_enabled = 1; // Mark RabbitMQ output as enabled
             fprintf(stderr, "🐰 RabbitMQ output enabled: %s\n", arg);
+        }
+        else if (strncmp(arg, "asn1", 4) == 0) {
+            add_asn1_output(cfg, arg);
+            g_rabbitmq_output_enabled = 1; // Mark RabbitMQ output as enabled (same transport)
+            fprintf(stderr, "📦 ASN.1 output enabled: %s\n", arg);
         }
         else if (strncmp(arg, "influx", 6) == 0) {
             add_influx_output(cfg, arg);

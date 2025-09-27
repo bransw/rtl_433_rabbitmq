@@ -69,6 +69,7 @@ set(SHARED_SOURCES
     src/output_rabbitmq.c
     src/rtl433_signal_format.c
     src/rtl433_asn1.c
+    src/output_asn1.c
 )
 
 # ASN1 code generation and sources
@@ -185,7 +186,7 @@ target_compile_options(rtl433_shared PRIVATE ${JSON_CFLAGS_OTHER})
 
 # Установка публичных заголовков
 set_target_properties(rtl433_shared PROPERTIES
-    PUBLIC_HEADER "include/rtl433_transport.h;include/rtl433_signal.h;include/rtl433_config.h;include/rtl433_input.h;include/rtl433_rfraw.h;include/rtl433_pulse_enhanced.h;include/rtl433_override.h;include/rtl433_asn1.h"
+    PUBLIC_HEADER "include/rtl433_transport.h;include/rtl433_signal.h;include/rtl433_config.h;include/rtl433_input.h;include/rtl433_rfraw.h;include/rtl433_pulse_enhanced.h;include/rtl433_override.h;include/rtl433_asn1.h;include/output_asn1.h"
 )
 
 # Экспорт переменных для использования в родительском CMake
