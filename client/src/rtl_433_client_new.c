@@ -252,8 +252,8 @@ static void usage(int exit_code)
             "  [-n <value>] Specify number of samples to take (each sample is an I/Q pair)\n"
             "  [-T <seconds>] Specify number of seconds to run, also 12:34 or 1h23m45s\n"
             "  [-E hop | quit] Hop/Quit after outputting successful event(s)\n"
-            "  [-Q [mode] | --enable-raw-signals] Enable raw pulse data output to 'signals' queue\n"
-            "       mode: 1=all signals (default), 2=no events, 3=with events\n"
+            "  [-Q [mode]] Queue routing mode for RabbitMQ and ASN.1 outputs\n"
+            "       0 or 3: both queues (signals+detected) [default], 1: signals only, 2: detected only\n"
             "  [-h] Output this usage help and exit\n"
             "       Use -d, -g, -R, -X, -F, -M, -r, -w, or -W without argument for more help\n\n",
             DEFAULT_FREQUENCY, DEFAULT_HOP_TIME, DEFAULT_SAMPLE_RATE);
