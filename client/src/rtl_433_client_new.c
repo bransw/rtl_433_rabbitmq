@@ -2259,7 +2259,11 @@ int main(int argc, char **argv) {
         
         
         rtl433_input_cleanup(&input_config);
-        // Continue to final cleanup instead of early return
+        
+        // If exit was requested (Ctrl+C), skip SDR and go to cleanup
+        if (cfg->exit_async) {
+            goto cleanup_and_exit;
+        }
     }
 
     // Normal SDR processing when no RabbitMQ input
@@ -2307,7 +2311,8 @@ int main(int argc, char **argv) {
 
     if (cfg->exit_code >= 0)
         r = cfg->exit_code;
-    
+
+cleanup_and_exit:
     // Clean up RabbitMQ input URL
     if (g_rabbitmq_input_url) {
         free(g_rabbitmq_input_url);
