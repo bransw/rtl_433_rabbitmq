@@ -59,19 +59,14 @@ static void R_API_CALLCONV print_asn1_array(data_output_t *output, data_array_t 
 static void R_API_CALLCONV print_asn1_data(data_output_t *output, data_t *data, char const *format)
 {
     UNUSED(format);
-
-    print_logf(LOG_NOTICE, "ASN1", "🔄 print_asn1_data called!");
-
+    
     if (!output || !data) {
-        print_logf(LOG_ERROR, "ASN1", "NULL parameters: output=%p, data=%p", output, data);
         return;
     }
-
+    
     data_output_asn1_t *asn1_out = (data_output_asn1_t *)output;
-
+    
     if (!asn1_out || !asn1_out->connected) {
-        print_logf(LOG_ERROR, "ASN1", "Not connected: asn1_out=%p, connected=%d", 
-                   asn1_out, asn1_out ? asn1_out->connected : 0);
         return;
     }
 
@@ -235,7 +230,7 @@ static void R_API_CALLCONV print_asn1_data(data_output_t *output, data_t *data, 
                     if (strcmp(d->key, "hex_string") == 0 && d->type == DATA_STRING) {
                         hex_string = (const char*)d->value.v_ptr;
                     } else if (strcmp(d->key, "pulses") == 0 && d->type == DATA_ARRAY) {
-                        pulses_array = &d->value.v_array;
+                        pulses_array = (data_array_t*)d->value.v_ptr;
                     } else if (strcmp(d->key, "count") == 0 && d->type == DATA_INT) {
                         count = d->value.v_int;
                     } else if (strcmp(d->key, "rate_Hz") == 0 && d->type == DATA_INT) {
@@ -245,7 +240,7 @@ static void R_API_CALLCONV print_asn1_data(data_output_t *output, data_t *data, 
                 
                 // Prefer hex_string, fallback to pulses array
                 size_t hex_len = 0;
-                int *pulses_data = NULL;
+                uint16_t *pulses_data = NULL;
                 int pulses_count = 0;
                 
                 if (hex_string && strlen(hex_string) > 0) {
@@ -264,10 +259,12 @@ static void R_API_CALLCONV print_asn1_data(data_output_t *output, data_t *data, 
                         pulses_count = pulses_array->num_values;
                     }
                     
-                    pulses_data = malloc(pulses_count * sizeof(int));
+                    pulses_data = malloc(pulses_count * sizeof(uint16_t));
                     if (pulses_data) {
+                        // data_array_t->values is void*, cast to int* for DATA_INT arrays
+                        int *array_values = (int*)pulses_array->values;
                         for (int i = 0; i < pulses_count; i++) {
-                            pulses_data[i] = pulses_array->values[i].v_int;
+                            pulses_data[i] = (uint16_t)array_values[i];
                         }
                     }
                     print_logf(LOG_NOTICE, "ASN1", "🔧 Encoding signal with pulses: freq=%u, mod=%d, count=%d, rate=%d", 
