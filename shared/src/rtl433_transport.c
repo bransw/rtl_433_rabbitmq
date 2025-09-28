@@ -617,7 +617,7 @@ void *user_data,
     timeout.tv_sec = timeout_ms / 1000;
     timeout.tv_usec = (timeout_ms % 1000) * 1000;
     
-    // Получение сообщения
+    // Получение сообщения с коротким таймаутом для отзывчивости
     amqp_envelope_t envelope;
     amqp_rpc_reply_t reply = amqp_consume_message(rabbitmq->conn, &envelope, &timeout, 0);
     

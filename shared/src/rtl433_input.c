@@ -177,19 +177,15 @@ void rtl433_input_stop_reading(rtl433_input_config_t *input_config)
 int rtl433_input_read_message(rtl433_input_config_t *input_config, int timeout_ms)
 {
     if (!input_config || !input_config->conn) {
-        fprintf(stderr, "🔴 rtl433_input_read_message: Invalid config or connection\n");
         return -1;
     }
 
-    int result = rtl433_transport_receive_messages(
+    return rtl433_transport_receive_messages(
         input_config->conn,
         input_config->message_handler,
         input_config->user_data,
         timeout_ms
     );
-    
-    
-    return result;
 }
 
 void rtl433_input_cleanup(rtl433_input_config_t *input_config)

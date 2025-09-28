@@ -2241,10 +2241,12 @@ int main(int argc, char **argv) {
         
         // Start reading messages in a loop (similar to SDR mode)
         while (!cfg->exit_async) {
-            int messages_received = rtl433_input_read_message(&input_config, 1000); // 1 second timeout
+            int messages_received = rtl433_input_read_message(&input_config, 250); // Shorter timeout for responsive exit
             
             if (messages_received < 0) {
                 fprintf(stderr, "🔴 ASN.1 Input: Connection error (code: %d), trying to reconnect...\n", messages_received);
+                // Check exit flag before sleeping
+                if (cfg->exit_async) break;
                 sleep(2); // Wait before retry
                 continue;
             }
