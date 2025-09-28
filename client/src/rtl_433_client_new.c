@@ -2244,7 +2244,7 @@ int main(int argc, char **argv) {
             int messages_received = rtl433_input_read_message(&input_config, 1000); // 1 second timeout
             
             if (messages_received < 0) {
-                fprintf(stderr, "Connection error, trying to reconnect...\n");
+                fprintf(stderr, "🔴 ASN.1 Input: Connection error (code: %d), trying to reconnect...\n", messages_received);
                 sleep(2); // Wait before retry
                 continue;
             }

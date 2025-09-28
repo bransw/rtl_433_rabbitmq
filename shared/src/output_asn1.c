@@ -85,23 +85,7 @@ static void R_API_CALLCONV print_asn1_data(data_output_t *output, data_t *data, 
             data_mod = d;
     }
     
-    // Debug: Print what data we received and all keys
-    print_logf(LOG_NOTICE, "ASN1", "🔍 Data analysis: model=%s, mod=%s, raw_mode=%d", 
-               data_model ? "YES" : "NO", data_mod ? "YES" : "NO", g_rtl433_raw_mode);
     
-    // Debug: Print all keys in the data structure
-    print_logf(LOG_NOTICE, "ASN1", "📋 All data keys:");
-    for (data_t *d = data; d; d = d->next) {
-        const char *value_str = "N/A";
-        if (d->type == DATA_STRING && d->value.v_ptr) {
-            value_str = (const char*)d->value.v_ptr;
-        } else if (d->type == DATA_INT) {
-            static char int_buf[32];
-            snprintf(int_buf, sizeof(int_buf), "%d", d->value.v_int);
-            value_str = int_buf;
-        }
-        print_logf(LOG_NOTICE, "ASN1", "   - %s = %s (type=%d)", d->key, value_str, d->type);
-    }
     
     // Route data based on type and -Q parameter
     if (data_model || data_mod) {
@@ -168,10 +152,7 @@ static void R_API_CALLCONV print_asn1_data(data_output_t *output, data_t *data, 
                 field_count
             );
             
-            if (asn1_buffer.result == RTL433_ASN1_OK) {
-                print_logf(LOG_NOTICE, "ASN1", "📦 DETECTED: Sending ASN.1 device data to '%s': %zu bytes", 
-                          target_queue, asn1_buffer.buffer_size);
-            }
+            // ASN.1 encoding successful - will be sent below
             
         } else if (data_mod) {
             // This is raw pulse data - encode as SignalMessage
@@ -222,6 +203,7 @@ static void R_API_CALLCONV print_asn1_data(data_output_t *output, data_t *data, 
                 
                 // Extract signal data: hex_string OR pulses array
                 const char *hex_string = NULL;
+                const char *time_string = NULL;
                 data_array_t *pulses_array = NULL;
                 int count = 0;
                 int sample_rate = 250000;  // Default
@@ -229,6 +211,8 @@ static void R_API_CALLCONV print_asn1_data(data_output_t *output, data_t *data, 
                 for (data_t *d = data; d; d = d->next) {
                     if (strcmp(d->key, "hex_string") == 0 && d->type == DATA_STRING) {
                         hex_string = (const char*)d->value.v_ptr;
+                    } else if (strcmp(d->key, "time") == 0 && d->type == DATA_STRING) {
+                        time_string = (const char*)d->value.v_ptr;
                     } else if (strcmp(d->key, "pulses") == 0 && d->type == DATA_ARRAY) {
                         pulses_array = (data_array_t*)d->value.v_ptr;
                     } else if (strcmp(d->key, "count") == 0 && d->type == DATA_INT) {
@@ -238,22 +222,31 @@ static void R_API_CALLCONV print_asn1_data(data_output_t *output, data_t *data, 
                     }
                 }
                 
-                // Prefer hex_string, fallback to pulses array
-                size_t hex_len = 0;
+                // Parse hex_string for multiple signals (separated by '+')
+                const uint8_t *hex_strings[32];
+                size_t hex_string_lens[32];
+                uint16_t hex_strings_count = 0;
                 uint16_t *pulses_data = NULL;
                 int pulses_count = 0;
                 
                 if (hex_string && strlen(hex_string) > 0) {
-                    // Use hex_string as-is ('+' separators are part of the data format)
-                    hex_len = strlen(hex_string);
-                    if (hex_len > 512) {
-                        hex_len = 512;
-                        print_logf(LOG_WARNING, "ASN1", "⚠️ Hex string truncated from %zu to 512 chars", strlen(hex_string));
+                    // Parse multiple hex strings separated by '+'
+                    char *hex_copy = strdup(hex_string);
+                    char *token = strtok(hex_copy, "+");
+                    
+                    while (token && hex_strings_count < 32) {
+                        size_t token_len = strlen(token);
+                        if (token_len > 0 && token_len <= 64) {
+                            hex_strings[hex_strings_count] = (const uint8_t*)strdup(token);
+                            hex_string_lens[hex_strings_count] = token_len;
+                            hex_strings_count++;
+                        }
+                        token = strtok(NULL, "+");
                     }
-                    print_logf(LOG_NOTICE, "ASN1", "🔧 Encoding signal with hex_string: freq=%u, mod=%d, hex_len=%zu", 
-                              frequency, modulation, hex_len);
+                    free(hex_copy);
+                    
                 } else if (pulses_array && count > 0) {
-                    // Use pulses array
+                    // Use pulses array as fallback
                     pulses_count = count * 2;  // pulse + gap pairs
                     if (pulses_count > pulses_array->num_values) {
                         pulses_count = pulses_array->num_values;
@@ -267,42 +260,64 @@ static void R_API_CALLCONV print_asn1_data(data_output_t *output, data_t *data, 
                             pulses_data[i] = (uint16_t)array_values[i];
                         }
                     }
-                    print_logf(LOG_NOTICE, "ASN1", "🔧 Encoding signal with pulses: freq=%u, mod=%d, count=%d, rate=%d", 
-                              frequency, modulation, count, sample_rate);
+                }
+                
+                // Convert RTL433 time format "@37.748737s" to ISO timestamp
+                char *iso_timestamp = NULL;
+                if (time_string && strncmp(time_string, "@", 1) == 0) {
+                    // Parse seconds from "@37.748737s" format
+                    double seconds = 0.0;
+                    if (sscanf(time_string, "@%lfs", &seconds) == 1) {
+                        // Create ISO timestamp (simplified - using current time as base)
+                        time_t now = time(NULL);
+                        struct tm *utc_tm = gmtime(&now);
+                        iso_timestamp = malloc(32);
+                        if (iso_timestamp) {
+                            strftime(iso_timestamp, 32, "%Y-%m-%dT%H:%M:%S.000Z", utc_tm);
+                        }
+                    }
+                }
+                
+                // Use new multi-hex function or fallback to pulses
+                if (hex_strings_count > 0) {
+                    asn1_buffer = rtl433_asn1_encode_signal_multi(
+                        ++asn1_out->package_counter,  // package_id
+                        iso_timestamp,                // timestamp (converted from RTL433 format)
+                        hex_strings, hex_string_lens, hex_strings_count, // multiple hex strings
+                        pulses_data, pulses_count, sample_rate,  // pulses_data (if available)
+                        modulation,
+                        frequency
+                    );
                 } else {
-                    print_logf(LOG_WARNING, "ASN1", "⚠️ No hex_string or pulses data available");
+                    asn1_buffer = rtl433_asn1_encode_signal_multi(
+                        ++asn1_out->package_counter,  // package_id
+                        iso_timestamp,                // timestamp (converted from RTL433 format)
+                        NULL, NULL, 0,                // no hex strings
+                        pulses_data, pulses_count, sample_rate,  // pulses_data only
+                        modulation,
+                        frequency
+                    );
                 }
                 
-                // Convert hex string to binary data if available
-                uint8_t *binary_data = NULL;
-                size_t binary_len = 0;
-                
-                if (hex_string && hex_len > 0) {
-                    // For now, pass hex_string as-is (it contains '+' separators)
-                    // The ASN.1 encoder will handle it as raw bytes
-                    binary_data = (uint8_t*)hex_string;
-                    binary_len = hex_len;
+                // Free allocated timestamp
+                if (iso_timestamp) {
+                    free(iso_timestamp);
                 }
-                
-                asn1_buffer = rtl433_asn1_encode_signal(
-                    ++asn1_out->package_counter,  // package_id
-                    NULL,                         // timestamp
-                    binary_data, binary_len,      // hex_string as binary data
-                    pulses_data, pulses_count, sample_rate,  // pulses_data (if available)
-                    modulation,
-                    frequency
-                );
                 
                 // Free allocated memory
                 if (pulses_data) {
                     free(pulses_data);
                 }
+                
+                // Free hex_strings memory
+                for (uint16_t i = 0; i < hex_strings_count; i++) {
+                    if (hex_strings[i]) {
+                        free((void*)hex_strings[i]);
+                    }
+                }
             }
             
-            if (asn1_buffer.result == RTL433_ASN1_OK) {
-                print_logf(LOG_NOTICE, "ASN1", "📡 SIGNAL: Sending ASN.1 signal data to '%s': %zu bytes", 
-                          target_queue, asn1_buffer.buffer_size);
-            }
+            // ASN.1 encoding successful - will be sent below
         }
         
         // Send the ASN.1 encoded message

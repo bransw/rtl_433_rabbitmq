@@ -69,6 +69,34 @@ rtl433_asn1_buffer_t rtl433_asn1_encode_signal(
 );
 
 /**
+ * @brief Encode RTL433 signal message with multiple hex strings to ASN.1 binary format
+ * 
+ * @param package_id Message package identifier (can be 0)
+ * @param timestamp Message timestamp (can be NULL)
+ * @param hex_strings Array of hex string pointers
+ * @param hex_string_lens Array of hex string lengths
+ * @param hex_strings_count Number of hex strings (1-32)
+ * @param pulses_data Pulse array data (can be NULL if hex_strings provided)
+ * @param pulses_count Number of pulses
+ * @param sample_rate Sample rate for pulses
+ * @param modulation Modulation type (0=OOK, 1=FSK, etc.)
+ * @param frequency Center frequency in Hz
+ * @return Encoded ASN.1 buffer (caller must free buffer)
+ */
+rtl433_asn1_buffer_t rtl433_asn1_encode_signal_multi(
+    uint32_t package_id,
+    const char *timestamp,
+    const uint8_t **hex_strings,
+    const size_t *hex_string_lens,
+    uint16_t hex_strings_count,
+    const uint16_t *pulses_data,
+    uint16_t pulses_count,
+    uint32_t sample_rate,
+    int modulation,
+    uint32_t frequency
+);
+
+/**
  * @brief Encode RTL433 detected device message to ASN.1 binary format
  * 
  * @param package_id Message package identifier (can be 0)

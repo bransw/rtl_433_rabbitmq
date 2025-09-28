@@ -113,9 +113,8 @@ int rtl433_input_init_from_url(rtl433_input_config_t *input_config,
     input_config->message_handler = internal_message_handler;
     input_config->user_data = wrapper;
 
-    // DON'T free config! It's used by the connection
-    // rtl433_transport_config_free(config);
-    // free(config);
+    // Store config pointer for cleanup later (fixes memory leak)
+    input_config->transport_config = config;
 
     printf("🎯 RabbitMQ input initialized successfully\n");
     return 0;
@@ -178,15 +177,19 @@ void rtl433_input_stop_reading(rtl433_input_config_t *input_config)
 int rtl433_input_read_message(rtl433_input_config_t *input_config, int timeout_ms)
 {
     if (!input_config || !input_config->conn) {
+        fprintf(stderr, "🔴 rtl433_input_read_message: Invalid config or connection\n");
         return -1;
     }
 
-    return rtl433_transport_receive_messages(
+    int result = rtl433_transport_receive_messages(
         input_config->conn,
         input_config->message_handler,
         input_config->user_data,
         timeout_ms
     );
+    
+    
+    return result;
 }
 
 void rtl433_input_cleanup(rtl433_input_config_t *input_config)
@@ -205,6 +208,13 @@ void rtl433_input_cleanup(rtl433_input_config_t *input_config)
         rtl433_transport_disconnect(input_config->conn);
         free(input_config->conn);
         input_config->conn = NULL;
+    }
+
+    // Free transport config
+    if (input_config->transport_config) {
+        rtl433_transport_config_free(input_config->transport_config);
+        free(input_config->transport_config);
+        input_config->transport_config = NULL;
     }
 
     // Free queue name
@@ -437,15 +447,15 @@ int rtl433_input_init_asn1_from_url(rtl433_input_config_t *input_config,
 
     // Convert asn1:// to amqp:// for transport layer
     char converted_url[512];
-    strncpy(converted_url, url, sizeof(converted_url) - 1);
-    converted_url[sizeof(converted_url) - 1] = '\0';
-    
-    // Replace "asn1://" with "amqp://"
-    if (strncmp(converted_url, "asn1://", 7) == 0) {
-        memmove(converted_url, converted_url + 4, strlen(converted_url + 4) + 1); // Remove "asn1"
-        memmove(converted_url + 4, converted_url, strlen(converted_url) + 1);     // Make space for "amqp"
-        memcpy(converted_url, "amqp", 4);                                         // Insert "amqp"
+    if (strncmp(url, "asn1://", 7) == 0) {
+        // Simple replacement: asn1:// -> amqp://
+        snprintf(converted_url, sizeof(converted_url), "amqp://%s", url + 7);
+    } else {
+        strncpy(converted_url, url, sizeof(converted_url) - 1);
+        converted_url[sizeof(converted_url) - 1] = '\0';
     }
+    
+    printf("🔄 Converted URL: %s -> %s\n", url, converted_url);
 
     if (rtl433_transport_parse_url(converted_url, config) != 0) {
         printf("❌ Failed to parse ASN.1 URL: %s\n", url);
@@ -468,8 +478,10 @@ int rtl433_input_init_asn1_from_url(rtl433_input_config_t *input_config,
     }
 
     // Connect to RabbitMQ
+    printf("🔌 Attempting to connect to RabbitMQ: %s\n", converted_url);
     if (rtl433_transport_connect(input_config->conn, config) != 0) {
-        printf("❌ Failed to connect to RabbitMQ for ASN.1 input\n");
+        printf("❌ Failed to connect to RabbitMQ for ASN.1 input: %s\n", converted_url);
+        printf("💡 Check if RabbitMQ is running and accessible\n");
         rtl433_transport_config_free(config);
         free(config);
         free(input_config->queue_name);
@@ -477,7 +489,7 @@ int rtl433_input_init_asn1_from_url(rtl433_input_config_t *input_config,
         return -1;
     }
 
-    printf("✅ Connected to RabbitMQ for ASN.1 input\n");
+    printf("✅ Connected to RabbitMQ for ASN.1 input: %s:%d\n", config->host, config->port);
 
     // Store handlers and user data
     input_config->running = false;
@@ -507,9 +519,8 @@ int rtl433_input_init_asn1_from_url(rtl433_input_config_t *input_config,
     input_config->message_handler = internal_asn1_message_handler;
     input_config->user_data = context;
 
-    // Cleanup config (connection is stored in input_config)
-    rtl433_transport_config_free(config);
-    free(config);
+    // Store config pointer for cleanup later
+    input_config->transport_config = config;
 
     printf("📦 ASN.1 input initialized successfully\n");
     return 0;
@@ -570,7 +581,6 @@ static void internal_asn1_message_handler(rtl433_message_t *message, void *user_
 
     if (message->is_binary && message->hex_string && message->binary_data_size > 0) {
         // Direct binary data from transport
-        printf("📦 Received ASN.1 binary message: %zu bytes\n", message->binary_data_size);
         binary_data = (uint8_t*)message->hex_string;
         bin_len = message->binary_data_size;
         
@@ -583,8 +593,6 @@ static void internal_asn1_message_handler(rtl433_message_t *message, void *user_
             
             // Free the pulse data (handler should have processed it)
             free(pulse_data);
-        } else {
-            printf("❌ Failed to parse ASN.1 pulse data\n");
         }
     } else if (message->hex_string && !message->is_binary) {
         // Legacy: hex string format (convert from hex to binary)

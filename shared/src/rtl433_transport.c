@@ -560,13 +560,14 @@ int rtl433_transport_send_binary_to_queue(rtl433_transport_connection_t *conn, c
 #ifdef ENABLE_RABBITMQ
 static int rtl433_transport_rabbitmq_receive(rtl433_transport_connection_t *conn, 
                                              rtl433_message_handler_t handler, 
-                                             void *user_data, 
+void *user_data, 
                                              int timeout_ms)
 {
     if (!conn->connection_data) {
         fprintf(stderr, "🔴 RabbitMQ receive: No connection data\n");
         return -1;
     }
+    
     
     rabbitmq_connection_data_t *rabbitmq = (rabbitmq_connection_data_t*)conn->connection_data;
     
@@ -575,7 +576,12 @@ static int rtl433_transport_rabbitmq_receive(rtl433_transport_connection_t *conn
         // Note: Queue should be pre-configured externally
         // No automatic queue creation - use existing RabbitMQ configuration
         
-        // Начинаем consuming (одно сообщение за раз)
+        // Cancel any existing consumer first (cleanup from previous errors)
+        if (strlen(rabbitmq->consumer_tag) > 0) {
+            amqp_basic_cancel(rabbitmq->conn, rabbitmq->channel, amqp_cstring_bytes(rabbitmq->consumer_tag));
+            amqp_get_rpc_reply(rabbitmq->conn); // Clear any pending replies
+            memset(rabbitmq->consumer_tag, 0, sizeof(rabbitmq->consumer_tag));
+        }
         amqp_basic_consume_ok_t *consume_ok = amqp_basic_consume(rabbitmq->conn, rabbitmq->channel,
                               amqp_cstring_bytes(conn->config->queue),
                               amqp_empty_bytes, // consumer tag (auto-generated)
@@ -583,6 +589,17 @@ static int rtl433_transport_rabbitmq_receive(rtl433_transport_connection_t *conn
         
         amqp_rpc_reply_t reply = amqp_get_rpc_reply(rabbitmq->conn);
         if (reply.reply_type != AMQP_RESPONSE_NORMAL) {
+            fprintf(stderr, "🔴 RabbitMQ consumer setup failed: reply_type=%d\n", reply.reply_type);
+            if (reply.reply_type == AMQP_RESPONSE_SERVER_EXCEPTION) {
+                fprintf(stderr, "🔴 Server exception detected\n");
+            } else if (reply.reply_type == AMQP_RESPONSE_LIBRARY_EXCEPTION) {
+                fprintf(stderr, "🔴 Library exception: %s\n", amqp_error_string2(reply.library_error));
+            }
+            
+            // Reset consumer state on setup failure
+            rabbitmq->consumer_active = false;
+            memset(rabbitmq->consumer_tag, 0, sizeof(rabbitmq->consumer_tag));
+            
             g_transport_stats.receive_errors++;
             return -1;
         }
@@ -658,9 +675,22 @@ static int rtl433_transport_rabbitmq_receive(rtl433_transport_connection_t *conn
     } else if (reply.reply_type == AMQP_RESPONSE_LIBRARY_EXCEPTION) {
         // Все library exceptions обрабатываем как нормальное отсутствие сообщений
         // Включая AMQP_STATUS_TIMEOUT и другие
+        if (reply.library_error != AMQP_STATUS_TIMEOUT) {
+            fprintf(stderr, "🟡 RabbitMQ library exception (non-timeout): %s\n", 
+                    amqp_error_string2(reply.library_error));
+            
+            // Reset consumer state on protocol errors
+            if (strstr(amqp_error_string2(reply.library_error), "protocol state")) {
+                rabbitmq->consumer_active = false;
+            }
+        }
         return 0; 
     } else {
-        // Server exceptions и другие - тоже не критичны
+        // Server exceptions и другие - логируем для диагностики
+        fprintf(stderr, "🟡 RabbitMQ server response: reply_type=%d\n", reply.reply_type);
+        if (reply.reply_type == AMQP_RESPONSE_SERVER_EXCEPTION) {
+            fprintf(stderr, "🟡 Server exception detected\n");
+        }
         return 0; // Обрабатываем как отсутствие сообщений
     }
 }

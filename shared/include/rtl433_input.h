@@ -19,6 +19,7 @@ extern "C" {
 /// RabbitMQ input configuration
 typedef struct {
     rtl433_transport_connection_t *conn;
+    rtl433_transport_config_t *transport_config;  // For cleanup
     char *queue_name;
     rtl433_message_handler_t message_handler;
     void *user_data;

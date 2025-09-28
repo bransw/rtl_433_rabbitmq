@@ -13,6 +13,7 @@
 
 // Include RTL433 headers for pulse_data_t
 #include "pulse_data.h"
+#include "rtl433_rfraw.h"
 
 // Include generated ASN.1 headers
 #include "RTL433Message.h"
@@ -110,10 +111,126 @@ rtl433_asn1_buffer_t rtl433_asn1_encode_signal(
     
     // Set signal data
     if (hex_string && hex_string_len > 0) {
-        // Use hex string format
-        signal_msg->signalData.present = SignalData_PR_hexString;
-        OCTET_STRING_fromBuf(&signal_msg->signalData.choice.hexString, 
-                            (const char*)hex_string, hex_string_len);
+        // Use hex strings format (single hex string as array of one)
+        signal_msg->signalData.present = SignalData_PR_hexStrings;
+        
+        // Create single OCTET STRING for the hex data
+        OCTET_STRING_t *hex_octet = calloc(1, sizeof(OCTET_STRING_t));
+        if (hex_octet) {
+            OCTET_STRING_fromBuf(hex_octet, (const char*)hex_string, hex_string_len);
+            asn_sequence_add(&signal_msg->signalData.choice.hexStrings, hex_octet);
+        }
+    } else if (pulses_data && pulses_count > 0) {
+        // Use pulses array format
+        signal_msg->signalData.present = SignalData_PR_pulsesArray;
+        PulsesData_t *pulses = &signal_msg->signalData.choice.pulsesArray;
+        
+        pulses->count = pulses_count;
+        pulses->sampleRate = sample_rate;
+        
+        // Allocate and copy pulse data
+        for (int i = 0; i < pulses_count; i++) {
+            long *pulse_val = calloc(1, sizeof(long));
+            if (pulse_val) {
+                *pulse_val = pulses_data[i];
+                asn_sequence_add(&pulses->pulses, pulse_val);
+            }
+        }
+    } else {
+        // No signal data provided
+        free(signal_msg);
+        free(rtl_message);
+        result.result = RTL433_ASN1_ERROR_INVALID_DATA;
+        return result;
+    }
+    
+    // Set modulation
+    signal_msg->modulation = modulation;
+    
+    // Set RF parameters
+    signal_msg->frequency.centerFreq = frequency;
+    
+    // Set message type
+    rtl_message->present = RTL433Message_PR_signalMessage;
+    rtl_message->choice.signalMessage = *signal_msg;
+    
+    // Encode to binary using unaligned PER
+    ssize_t encoded_size = uper_encode_to_new_buffer(&asn_DEF_RTL433Message, 
+                                                     NULL, rtl_message, 
+                                                     (void**)&result.buffer);
+    
+    if (encoded_size < 0) {
+        result.result = RTL433_ASN1_ERROR_ENCODE;
+        result.buffer_size = 0;
+    } else {
+        result.buffer_size = encoded_size;
+        result.result = RTL433_ASN1_OK;
+    }
+    
+    // Cleanup
+    ASN_STRUCT_FREE(asn_DEF_RTL433Message, rtl_message);
+    
+    return result;
+}
+
+rtl433_asn1_buffer_t rtl433_asn1_encode_signal_multi(
+    uint32_t package_id,
+    const char *timestamp,
+    const uint8_t **hex_strings,
+    const size_t *hex_string_lens,
+    uint16_t hex_strings_count,
+    const uint16_t *pulses_data,
+    uint16_t pulses_count,
+    uint32_t sample_rate,
+    int modulation,
+    uint32_t frequency
+) {
+    rtl433_asn1_buffer_t result = {0};
+    
+    // Validate input
+    if (hex_strings_count > 32) {
+        result.result = RTL433_ASN1_ERROR_INVALID_DATA;
+        return result;
+    }
+    
+    // Create RTL433Message wrapper
+    RTL433Message_t *rtl_message = calloc(1, sizeof(RTL433Message_t));
+    if (!rtl_message) {
+        result.result = RTL433_ASN1_ERROR_MEMORY;
+        return result;
+    }
+    
+    // Create SignalMessage
+    SignalMessage_t *signal_msg = calloc(1, sizeof(SignalMessage_t));
+    if (!signal_msg) {
+        free(rtl_message);
+        result.result = RTL433_ASN1_ERROR_MEMORY;
+        return result;
+    }
+    
+    // Set package ID
+    signal_msg->packageId = package_id;
+    
+    // Set timestamp if provided
+    if (timestamp) {
+        signal_msg->timestamp = create_generalized_time(timestamp);
+    }
+    
+    // Set signal data
+    if (hex_strings && hex_strings_count > 0) {
+        // Use hex strings format (multiple hex strings)
+        signal_msg->signalData.present = SignalData_PR_hexStrings;
+        
+        // Add each hex string to the sequence
+        for (uint16_t i = 0; i < hex_strings_count; i++) {
+            if (hex_strings[i] && hex_string_lens[i] > 0) {
+                OCTET_STRING_t *hex_octet = calloc(1, sizeof(OCTET_STRING_t));
+                if (hex_octet) {
+                    OCTET_STRING_fromBuf(hex_octet, (const char*)hex_strings[i], hex_string_lens[i]);
+                    asn_sequence_add(&signal_msg->signalData.choice.hexStrings, hex_octet);
+                }
+            }
+        }
     } else if (pulses_data && pulses_count > 0) {
         // Use pulses array format
         signal_msg->signalData.present = SignalData_PR_pulsesArray;
@@ -367,17 +484,34 @@ rtl433_asn1_result_t rtl433_asn1_decode_signal_to_pulse_data(
     }
     
     // Extract signal data
-    if (signal_msg->signalData.present == SignalData_PR_hexString) {
-        // hex_string format - reconstruct from hex bytes
-        OCTET_STRING_t *hex_data = &signal_msg->signalData.choice.hexString;
+    if (signal_msg->signalData.present == SignalData_PR_hexStrings) {
+        // Multiple hex_strings format - reconstruct from multiple hex bytes
+        struct SignalData__hexStrings *hex_strings = &signal_msg->signalData.choice.hexStrings;
         
-        // Convert hex bytes to pulse array (implementation depends on rtl433 internals)
-        // This would need to call rtl433's hex-to-pulse conversion functions
-        // For now, store the hex data and mark it for later conversion
-        if (hex_data->size <= sizeof(pulse_data->pulse) * 2) {
-            // Simple hex decode - this is a placeholder
-            pulse_data->num_pulses = hex_data->size * 4; // Approximate
-            // Real implementation would call rtl433_signal_reconstruct_from_hex_bytes
+        // For now, use the first hex string (could be enhanced to combine multiple)
+        if (hex_strings->list.count > 0 && hex_strings->list.array[0]) {
+            OCTET_STRING_t *hex_data = hex_strings->list.array[0];
+            
+            // Convert hex bytes to pulse array using rtl433 rfraw parser
+            if (hex_data->size > 0) {
+                // Create null-terminated string from OCTET STRING
+                char *hex_string = malloc(hex_data->size + 1);
+                if (hex_string) {
+                    memcpy(hex_string, hex_data->buf, hex_data->size);
+                    hex_string[hex_data->size] = '\0';
+                    
+                    // Use rtl433 rfraw parser to decode hex string
+                    int result = rtl433_rfraw_parse_hex_string(hex_string, pulse_data);
+                    if (result == 0) {
+                        printf("✅ Successfully parsed hex string: %u pulses\n", pulse_data->num_pulses);
+                    } else {
+                        printf("⚠️ Failed to parse hex string, using defaults\n");
+                        pulse_data->num_pulses = 0;
+                    }
+                    
+                    free(hex_string);
+                }
+            }
         }
         
     } else if (signal_msg->signalData.present == SignalData_PR_pulsesArray) {

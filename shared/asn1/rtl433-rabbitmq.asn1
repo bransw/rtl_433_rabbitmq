@@ -18,7 +18,7 @@ SignalMessage ::= SEQUENCE {
     packageId           INTEGER (0..4294967295),    -- uint32
     timestamp           GeneralizedTime OPTIONAL,
     
-    -- Signal data (choose one format)
+    -- Signal data (multiple hex_strings preferred, pulses as fallback)
     signalData          SignalData,
     
     -- RF parameters
@@ -32,9 +32,9 @@ SignalMessage ::= SEQUENCE {
     timingInfo          TimingInfo OPTIONAL
 }
 
--- Signal data representation - hex_string OR pulses array
+-- Signal data representation - multiple hex_strings OR pulses array
 SignalData ::= CHOICE {
-    hexString           OCTET STRING (SIZE (1..512)),     -- Raw bytes from hex_string
+    hexStrings          SEQUENCE (SIZE (1..32)) OF OCTET STRING (SIZE (1..64)), -- Multiple signals
     pulsesArray         PulsesData                        -- For complex signals >8 timing bins
 }
 
