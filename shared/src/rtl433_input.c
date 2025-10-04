@@ -280,8 +280,44 @@ static void internal_message_handler(rtl433_message_t *message, void *user_data)
     if (pulse_data) {
         printf("📡 Processing pulse data: %d pulses\n", pulse_data->num_pulses);
         
+        // DEBUG: Print detailed pulse_data for device detection analysis
+        printf("🔍 PULSE_DATA DEBUG FOR DEVICE DETECTION:\n");
+        printf("  ├─ num_pulses: %u\n", pulse_data->num_pulses);
+        printf("  ├─ sample_rate: %u Hz\n", pulse_data->sample_rate);
+        printf("  ├─ centerfreq_hz: %.0f Hz\n", pulse_data->centerfreq_hz);
+        printf("  ├─ freq1_hz: %.0f Hz\n", pulse_data->freq1_hz);
+        printf("  ├─ freq2_hz: %.0f Hz\n", pulse_data->freq2_hz);
+        printf("  ├─ offset: %lu samples\n", pulse_data->offset);
+        printf("  ├─ start_ago: %u\n", pulse_data->start_ago);
+        printf("  ├─ end_ago: %u\n", pulse_data->end_ago);
+        printf("  ├─ depth_bits: %u\n", pulse_data->depth_bits);
+        printf("  ├─ ook_low_estimate: %d\n", pulse_data->ook_low_estimate);
+        printf("  ├─ ook_high_estimate: %d\n", pulse_data->ook_high_estimate);
+        printf("  ├─ fsk_f1_est: %d\n", pulse_data->fsk_f1_est);
+        printf("  └─ fsk_f2_est: %d\n", pulse_data->fsk_f2_est);
+        
+        if (pulse_data->num_pulses > 0) {
+            printf("  📊 First 20 pulses: ");
+            for (int i = 0; i < pulse_data->num_pulses && i < 20; i++) {
+                printf("%d ", pulse_data->pulse[i]);
+            }
+            if (pulse_data->num_pulses > 20) printf("...");
+            printf("\n");
+            
+            printf("  📊 First 20 gaps: ");
+            for (int i = 0; i < pulse_data->num_pulses && i < 20; i++) {
+                printf("%d ", pulse_data->gap[i]);
+            }
+            if (pulse_data->num_pulses > 20) printf("...");
+            printf("\n");
+        }
+        
+        printf("🎯 Calling device detection handler...\n");
+        
         // Call user's pulse handler
         wrapper->pulse_handler(pulse_data, wrapper->user_data);
+        
+        printf("✅ Device detection handler returned\n");
     } else {
         printf("⚠️ Failed to extract pulse data from message\n");
     }

@@ -25,7 +25,7 @@
 - **`start_ago`** - Signal start time 
 - **`end_ago`** - Signal end time
 - **`ook_low_estimate`** / **`ook_high_estimate`** - Thresholds for OOK
-- **`fsk_f1_est`** / **`fsk_f2_est_value`** - Frequencies for FSK
+- **`fsk_f1_est`** / **`fsk_f2_est`** - Frequencies for FSK
 
 ### 📋 **DETECTED Queue (decoded devices):**
 
@@ -111,7 +111,7 @@ signal_data = {
     "ook_low_estimate": 14147,
     "ook_high_estimate": 28567,
     "fsk_f1_est": 388,
-    "fsk_f2_est_value": 0,
+    "fsk_f2_est": 0,
     "hex_string": "AAB10209745E8C8155"
 }
 
@@ -312,7 +312,7 @@ The 'signals' queue contains raw pulse data that can be used to reconstruct the 
   "ook_low_estimate": 14147,
   "ook_high_estimate": 28567,
   "fsk_f1_est": 388,
-  "fsk_f2_est_value": 0,
+  "fsk_f2_est": 0,
   "hex_string": "AAB10209745E8C8155"
 }
 ```
@@ -669,3 +669,7 @@ The RabbitMQ signal recovery system provides flexible options for signal reconst
 - **⏱️ Correlation**: Time-based matching between signals and detections
 
 This architecture enables efficient signal processing while maintaining compatibility with various signal types and quality levels.
+
+
+
+

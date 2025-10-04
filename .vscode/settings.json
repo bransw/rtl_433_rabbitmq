@@ -1,5 +1,11 @@
 {
     "cmake.automaticReconfigure": false,
+    "cmake.configureOnEdit": false,
+    "cmake.configureOnOpen": false,
+    "cmake.buildBeforeRun": false,
+    "cmake.autoSelectActiveFolder": false,
+    "cmake.saveBeforeBuild": false,
+    "cmake.clearOutputBeforeBuild": false,
     "cmake.touchbar.advanced": {
         
     }

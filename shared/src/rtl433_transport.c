@@ -887,7 +887,7 @@ rtl433_message_t* rtl433_message_create_from_json(const char *json_str)
     }
     
     json_object *fsk_f2_est_obj;
-    if (json_object_object_get_ex(root, "fsk_f2_est_value", &fsk_f2_est_obj)) {
+    if (json_object_object_get_ex(root, "fsk_f2_est", &fsk_f2_est_obj)) {
         msg->pulse_data->fsk_f2_est = json_object_get_int(fsk_f2_est_obj);
     }
     

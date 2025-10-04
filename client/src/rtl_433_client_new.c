@@ -110,6 +110,40 @@ static void rabbitmq_pulse_handler(pulse_data_t *pulse_data, void *user_data) {
     fprintf(stderr, "📊 RabbitMQ: Processing pulse data: %d pulses [Signal #%d]\n", 
             pulse_data->num_pulses, signal_stats.total_received);
     
+    // DEBUG: Print detailed pulse_data for device detection analysis
+    fprintf(stderr, "🔍 PULSE_DATA DEBUG FOR DEVICE DETECTION:\n");
+    fprintf(stderr, "  ├─ num_pulses: %u\n", pulse_data->num_pulses);
+    fprintf(stderr, "  ├─ sample_rate: %u Hz\n", pulse_data->sample_rate);
+    fprintf(stderr, "  ├─ centerfreq_hz: %.0f Hz\n", pulse_data->centerfreq_hz);
+    fprintf(stderr, "  ├─ freq1_hz: %.0f Hz\n", pulse_data->freq1_hz);
+    fprintf(stderr, "  ├─ freq2_hz: %.0f Hz\n", pulse_data->freq2_hz);
+    fprintf(stderr, "  ├─ offset: %lu samples\n", pulse_data->offset);
+    fprintf(stderr, "  ├─ start_ago: %u\n", pulse_data->start_ago);
+    fprintf(stderr, "  ├─ end_ago: %u\n", pulse_data->end_ago);
+    fprintf(stderr, "  ├─ depth_bits: %u\n", pulse_data->depth_bits);
+    fprintf(stderr, "  ├─ ook_low_estimate: %d\n", pulse_data->ook_low_estimate);
+    fprintf(stderr, "  ├─ ook_high_estimate: %d\n", pulse_data->ook_high_estimate);
+    fprintf(stderr, "  ├─ fsk_f1_est: %d\n", pulse_data->fsk_f1_est);
+    fprintf(stderr, "  └─ fsk_f2_est: %d\n", pulse_data->fsk_f2_est);
+    
+    if (pulse_data->num_pulses > 0) {
+        fprintf(stderr, "  📊 First 20 pulses: ");
+        for (int i = 0; i < pulse_data->num_pulses && i < 20; i++) {
+            fprintf(stderr, "%d ", pulse_data->pulse[i]);
+        }
+        if (pulse_data->num_pulses > 20) fprintf(stderr, "...");
+        fprintf(stderr, "\n");
+        
+        fprintf(stderr, "  📊 First 20 gaps: ");
+        for (int i = 0; i < pulse_data->num_pulses && i < 20; i++) {
+            fprintf(stderr, "%d ", pulse_data->gap[i]);
+        }
+        if (pulse_data->num_pulses > 20) fprintf(stderr, "...");
+        fprintf(stderr, "\n");
+    }
+    
+    fprintf(stderr, "🎯 Calling device detection decoders...\n");
+    
     // Process pulse data through rtl_433 decoders
     int events = 0;
     
@@ -129,6 +163,13 @@ static void rabbitmq_pulse_handler(pulse_data_t *pulse_data, void *user_data) {
         } else {
             signal_stats.decoding_failed++;
         }
+    }
+    
+    // DEBUG: Print detection results
+    if (events > 0) {
+        fprintf(stderr, "✅ Device detection successful: %d events detected\n", events);
+    } else {
+        fprintf(stderr, "❌ No devices detected for this signal\n");
     }
     
 }

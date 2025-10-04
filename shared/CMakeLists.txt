@@ -25,20 +25,18 @@ else()
     message(STATUS "RabbitMQ support disabled")
 endif()
 
-# ASN1 support (optional)
-find_program(ASN1C_EXECUTABLE asn1c)
-
-if(ASN1C_EXECUTABLE)
+# ASN1 support - use external libr_asn1 library
+if(TARGET r_asn1)
     set(ENABLE_ASN1 TRUE)
     add_definitions(-DENABLE_ASN1)
-    message(STATUS "ASN1 support enabled")
+    message(STATUS "ASN1 support enabled - using libr_asn1")
     
-    # ASN1 generation directory
-    set(ASN1_OUTPUT_DIR ${CMAKE_CURRENT_BINARY_DIR}/asn1-generated)
-    set(ASN1_SCHEMA ${CMAKE_CURRENT_SOURCE_DIR}/asn1/rtl433-rabbitmq.asn1)
+    # Use ASN1 library variables
+    set(ASN1_LIBRARIES ${ASN1_LIBRARIES})
+    set(ASN1_INCLUDE_DIRS ${ASN1_INCLUDE_DIRS})
 else()
     set(ENABLE_ASN1 FALSE)
-    message(STATUS "ASN1 support disabled - asn1c compiler not found")
+    message(STATUS "ASN1 support disabled - libr_asn1 not available")
 endif()
 
 # Заголовочные файлы
@@ -54,7 +52,7 @@ if(ENABLE_RABBITMQ)
 endif()
 
 if(ENABLE_ASN1)
-    include_directories(${ASN1_OUTPUT_DIR})
+    include_directories(${ASN1_INCLUDE_DIRS})
 endif()
 
 # Исходные файлы
@@ -70,100 +68,11 @@ set(SHARED_SOURCES
     src/rtl433_signal_format.c
     src/rtl433_asn1.c
     src/output_asn1.c
+    src/rtl433_asn1_pulse.c
 )
 
-# ASN1 code generation and sources
-if(ENABLE_ASN1)
-    # List of known ASN1 C files that will be generated (based on actual asn1c output)
-    set(ASN1_GENERATED_SOURCES
-        ${ASN1_OUTPUT_DIR}/BIT_STRING.c
-        ${ASN1_OUTPUT_DIR}/BOOLEAN.c
-        ${ASN1_OUTPUT_DIR}/ConfigAction.c
-        ${ASN1_OUTPUT_DIR}/ConfigData.c
-        ${ASN1_OUTPUT_DIR}/ConfigMessage.c
-        ${ASN1_OUTPUT_DIR}/ConfigParameter.c
-        ${ASN1_OUTPUT_DIR}/DetectedMessage.c
-        ${ASN1_OUTPUT_DIR}/DetectionMetadata.c
-        ${ASN1_OUTPUT_DIR}/DeviceConfig.c
-        ${ASN1_OUTPUT_DIR}/DeviceData.c
-        ${ASN1_OUTPUT_DIR}/DeviceDataField.c
-        ${ASN1_OUTPUT_DIR}/DeviceFieldValue.c
-        ${ASN1_OUTPUT_DIR}/DeviceInfo.c
-        ${ASN1_OUTPUT_DIR}/ErrorInfo.c
-        ${ASN1_OUTPUT_DIR}/ErrorSeverity.c
-        ${ASN1_OUTPUT_DIR}/FilterSettings.c
-        ${ASN1_OUTPUT_DIR}/FrequencyRange.c
-        ${ASN1_OUTPUT_DIR}/GeneralizedTime.c
-        ${ASN1_OUTPUT_DIR}/INTEGER.c
-        ${ASN1_OUTPUT_DIR}/INTEGER_oer.c
-        ${ASN1_OUTPUT_DIR}/ModulationType.c
-        ${ASN1_OUTPUT_DIR}/NativeEnumerated.c
-        ${ASN1_OUTPUT_DIR}/NativeEnumerated_oer.c
-        ${ASN1_OUTPUT_DIR}/NativeInteger.c
-        ${ASN1_OUTPUT_DIR}/NativeInteger_oer.c
-        ${ASN1_OUTPUT_DIR}/NativeReal.c
-        ${ASN1_OUTPUT_DIR}/OCTET_STRING.c
-        ${ASN1_OUTPUT_DIR}/OCTET_STRING_oer.c
-        ${ASN1_OUTPUT_DIR}/OPEN_TYPE.c
-        ${ASN1_OUTPUT_DIR}/OPEN_TYPE_oer.c
-        ${ASN1_OUTPUT_DIR}/PulsesData.c
-        ${ASN1_OUTPUT_DIR}/REAL.c
-        ${ASN1_OUTPUT_DIR}/RFParameters.c
-        ${ASN1_OUTPUT_DIR}/RTL433Message.c
-        ${ASN1_OUTPUT_DIR}/SignalData.c
-        ${ASN1_OUTPUT_DIR}/SignalMessage.c
-        ${ASN1_OUTPUT_DIR}/SignalQuality.c
-        ${ASN1_OUTPUT_DIR}/StatusMessage.c
-        ${ASN1_OUTPUT_DIR}/SystemSettings.c
-        ${ASN1_OUTPUT_DIR}/SystemStatistics.c
-        ${ASN1_OUTPUT_DIR}/SystemStatus.c
-        ${ASN1_OUTPUT_DIR}/TimingInfo.c
-        ${ASN1_OUTPUT_DIR}/UTF8String.c
-        ${ASN1_OUTPUT_DIR}/asn_SEQUENCE_OF.c
-        ${ASN1_OUTPUT_DIR}/asn_SET_OF.c
-        ${ASN1_OUTPUT_DIR}/asn_application.c
-        ${ASN1_OUTPUT_DIR}/asn_bit_data.c
-        ${ASN1_OUTPUT_DIR}/asn_codecs_prim.c
-        ${ASN1_OUTPUT_DIR}/asn_internal.c
-        ${ASN1_OUTPUT_DIR}/asn_random_fill.c
-        ${ASN1_OUTPUT_DIR}/ber_decoder.c
-        ${ASN1_OUTPUT_DIR}/ber_tlv_length.c
-        ${ASN1_OUTPUT_DIR}/ber_tlv_tag.c
-        ${ASN1_OUTPUT_DIR}/constr_CHOICE.c
-        ${ASN1_OUTPUT_DIR}/constr_CHOICE_oer.c
-        ${ASN1_OUTPUT_DIR}/constr_SEQUENCE.c
-        ${ASN1_OUTPUT_DIR}/constr_SEQUENCE_OF.c
-        ${ASN1_OUTPUT_DIR}/constr_SEQUENCE_oer.c
-        ${ASN1_OUTPUT_DIR}/constr_SET_OF.c
-        ${ASN1_OUTPUT_DIR}/constr_SET_OF_oer.c
-        ${ASN1_OUTPUT_DIR}/constr_TYPE.c
-        ${ASN1_OUTPUT_DIR}/constraints.c
-        ${ASN1_OUTPUT_DIR}/der_encoder.c
-        ${ASN1_OUTPUT_DIR}/oer_decoder.c
-        ${ASN1_OUTPUT_DIR}/oer_encoder.c
-        ${ASN1_OUTPUT_DIR}/oer_support.c
-        ${ASN1_OUTPUT_DIR}/per_decoder.c
-        ${ASN1_OUTPUT_DIR}/per_encoder.c
-        ${ASN1_OUTPUT_DIR}/per_opentype.c
-        ${ASN1_OUTPUT_DIR}/per_support.c
-        ${ASN1_OUTPUT_DIR}/xer_decoder.c
-        ${ASN1_OUTPUT_DIR}/xer_encoder.c
-        ${ASN1_OUTPUT_DIR}/xer_support.c
-    )
-    
-    # Custom target to generate ASN1 C code
-    add_custom_command(
-        OUTPUT ${ASN1_GENERATED_SOURCES}
-        COMMAND ${CMAKE_COMMAND} -E make_directory ${ASN1_OUTPUT_DIR}
-        COMMAND ${ASN1C_EXECUTABLE} -fcompound-names -fincludes-quoted -fskeletons-copy -D ${ASN1_OUTPUT_DIR} ${ASN1_SCHEMA}
-        DEPENDS ${ASN1_SCHEMA}
-        COMMENT "Generating ASN1 C code from schema"
-        VERBATIM
-    )
-    
-    # Add ASN1 sources to shared sources
-    list(APPEND SHARED_SOURCES ${ASN1_GENERATED_SOURCES})
-endif()
+# ASN1 library dependency
+# ASN1 sources are now provided by libr_asn1 library
 
 # Создание статической библиотеки
 add_library(rtl433_shared STATIC ${SHARED_SOURCES})
@@ -178,7 +87,7 @@ if(ENABLE_RABBITMQ)
 endif()
 
 if(ENABLE_ASN1)
-    target_link_libraries(rtl433_shared m)  # Math library for ASN1
+    target_link_libraries(rtl433_shared ${ASN1_LIBRARIES} m)  # ASN1 library and math library
 endif()
 
 # Установка флагов компиляции
@@ -186,7 +95,7 @@ target_compile_options(rtl433_shared PRIVATE ${JSON_CFLAGS_OTHER})
 
 # Установка публичных заголовков
 set_target_properties(rtl433_shared PROPERTIES
-    PUBLIC_HEADER "include/rtl433_transport.h;include/rtl433_signal.h;include/rtl433_config.h;include/rtl433_input.h;include/rtl433_rfraw.h;include/rtl433_pulse_enhanced.h;include/rtl433_override.h;include/rtl433_asn1.h;include/output_asn1.h"
+    PUBLIC_HEADER "include/rtl433_transport.h;include/rtl433_signal.h;include/rtl433_config.h;include/rtl433_input.h;include/rtl433_rfraw.h;include/rtl433_pulse_enhanced.h;include/rtl433_override.h;include/rtl433_asn1.h;include/output_asn1.h;include/rtl433_asn1_pulse.h"
 )
 
 # Экспорт переменных для использования в родительском CMake

@@ -75,6 +75,11 @@ endif()
 # Create client executable
 add_executable(rtl_433_client ${CLIENT_SOURCES})
 
+# Create demo_real_data executable
+add_executable(demo_real_data ../shared/examples/demo_real_data.c)
+
+# converter-example is now built by main CMakeLists.txt
+
 # Link libraries
 target_link_libraries(rtl_433_client 
     ${RTL433_SHARED_LIBRARIES}
@@ -121,5 +126,17 @@ target_include_directories(rtl_433_client PRIVATE
     ${CURL_INCLUDE_DIRS}
 )
 
-# Install executable
-install(TARGETS rtl_433_client DESTINATION bin)
+# Link libraries for demo_real_data
+target_link_libraries(demo_real_data 
+    ${JSON_C_LIBRARIES}
+    m
+)
+
+# Link libraries for demo_real_data include directories
+target_include_directories(demo_real_data PRIVATE 
+    ${JSON_C_INCLUDE_DIRS}
+)
+
+# Install executables (converter-example is installed by main CMakeLists.txt)
+set(INSTALL_TARGETS rtl_433_client demo_real_data)
+install(TARGETS ${INSTALL_TARGETS} DESTINATION bin)

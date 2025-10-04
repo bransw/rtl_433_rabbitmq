@@ -26,7 +26,7 @@
 - **`start_ago`** - Время начала сигнала 
 - **`end_ago`** - Время окончания сигнала
 - **`ook_low_estimate`** / **`ook_high_estimate`** - Пороги для OOK
-- **`fsk_f1_est`** / **`fsk_f2_est_value`** - Частоты для FSK
+- **`fsk_f1_est`** / **`fsk_f2_est`** - Частоты для FSK
 
 ### 📋 **DETECTED Queue (декодированные устройства):**
 
@@ -141,7 +141,7 @@ signal_data = {
     "ook_low_estimate": 14147,
     "ook_high_estimate": 28567,
     "fsk_f1_est": 388,
-    "fsk_f2_est_value": 0,
+    "fsk_f2_est": 0,
     "hex_string": "AAB10209745E8C8155"
 }
 
@@ -393,7 +393,7 @@ The 'signals' queue contains raw pulse data that can be used to reconstruct the 
   "ook_low_estimate": 14147,
   "ook_high_estimate": 28567,
   "fsk_f1_est": 388,
-  "fsk_f2_est_value": 0,
+  "fsk_f2_est": 0,
   "hex_string": "AAB10209745E8C8155"
 }
 ```

@@ -387,11 +387,11 @@ int rtl433_rfraw_parse_hex_string(const char *hex_string, pulse_data_t *pulse_da
     char timing_count_str[3] = {hex_string[6], hex_string[7], '\0'};
     unsigned int timing_count = strtoul(timing_count_str, NULL, 16);
     
-    if (timing_count > 8) return -1; // Too many timing bins
+    if (timing_count > 16) return -1; // Too many timing bins (increased limit)
     
     // Parse timing histogram values
-    unsigned int timings[8];
-    for (unsigned int i = 0; i < timing_count && i < 8; i++) {
+    unsigned int timings[16];
+    for (unsigned int i = 0; i < timing_count && i < 16; i++) {
         if (hex_len < 8 + (i + 1) * 4) return -1;
         char timing_str[5] = {
             hex_string[8 + i * 4],

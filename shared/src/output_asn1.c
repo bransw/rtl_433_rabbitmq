@@ -112,10 +112,10 @@ static void R_API_CALLCONV print_asn1_data(data_output_t *output, data_t *data, 
             const char *protocol = NULL;
             
             // Collect key-value pairs for device data
-            char *data_fields[64];  // Max 32 key-value pairs
+            char *data_fields[RTL433_ASN1_HEX_STRINGS_MAX_COUNT * 2];  // Max RTL433_ASN1_HEX_STRINGS_MAX_COUNT key-value pairs
             size_t field_count = 0;
             
-            for (data_t *d = data; d && field_count < 62; d = d->next) {
+            for (data_t *d = data; d && field_count < (RTL433_ASN1_HEX_STRINGS_MAX_COUNT * 2 - 2); d = d->next) {
                 if (strcmp(d->key, "model") == 0) continue;  // Already handled
                 if (strcmp(d->key, "mod") == 0) continue;    // Skip mod field
                 
@@ -223,8 +223,8 @@ static void R_API_CALLCONV print_asn1_data(data_output_t *output, data_t *data, 
                 }
                 
                 // Parse hex_string for multiple signals (separated by '+')
-                const uint8_t *hex_strings[32];
-                size_t hex_string_lens[32];
+                const uint8_t *hex_strings[RTL433_ASN1_HEX_STRINGS_MAX_COUNT];
+                size_t hex_string_lens[RTL433_ASN1_HEX_STRINGS_MAX_COUNT];
                 uint16_t hex_strings_count = 0;
                 uint16_t *pulses_data = NULL;
                 int pulses_count = 0;
@@ -234,9 +234,9 @@ static void R_API_CALLCONV print_asn1_data(data_output_t *output, data_t *data, 
                     char *hex_copy = strdup(hex_string);
                     char *token = strtok(hex_copy, "+");
                     
-                    while (token && hex_strings_count < 32) {
+                    while (token && hex_strings_count < RTL433_ASN1_HEX_STRINGS_MAX_COUNT) {
                         size_t token_len = strlen(token);
-                        if (token_len > 0 && token_len <= 64) {
+                        if (token_len > 0 && token_len <= RTL433_ASN1_HEX_STRING_MAX_SIZE) {
                             hex_strings[hex_strings_count] = (const uint8_t*)strdup(token);
                             hex_string_lens[hex_strings_count] = token_len;
                             hex_strings_count++;

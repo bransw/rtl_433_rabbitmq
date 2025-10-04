@@ -16,7 +16,13 @@ extern "C" {
 #include <stdint.h>
 #include <stddef.h>
 
-#ifdef ENABLE_ASN1
+// ASN.1 support is always enabled
+
+// ASN.1 size constraints from rtl433-rabbitmq.asn1 specification
+#define RTL433_ASN1_HEX_STRING_MAX_SIZE     512  // hexStringMaxSize from ASN.1 spec
+#define RTL433_ASN1_HEX_STRINGS_MAX_COUNT   32   // hexStringsMaxCount from ASN.1 spec  
+#define RTL433_ASN1_HEX_STRING_MIN_SIZE     1    // hexStringMinSize from ASN.1 spec
+#define RTL433_ASN1_PULSES_MAX_COUNT        65535 // pulsesMaxCount from ASN.1 spec
 
 // Forward declarations for ASN.1 structures
 // Note: These will be redefined by generated headers, but we need them for interface
@@ -75,7 +81,8 @@ rtl433_asn1_buffer_t rtl433_asn1_encode_signal(
  * @param timestamp Message timestamp (can be NULL)
  * @param hex_strings Array of hex string pointers
  * @param hex_string_lens Array of hex string lengths
- * @param hex_strings_count Number of hex strings (1-32)
+ * @param hex_strings_count Number of hex strings (1-RTL433_ASN1_HEX_STRINGS_MAX_COUNT)
+ * @param pulses_data Pulse array data (can be NULL if hex_strings provided)
  * @param pulses_data Pulse array data (can be NULL if hex_strings provided)
  * @param pulses_count Number of pulses
  * @param sample_rate Sample rate for pulses
@@ -198,14 +205,7 @@ const char* rtl433_asn1_get_version(void);
  */
 rtl433_asn1_result_t rtl433_asn1_validate(const uint8_t *buffer, size_t buffer_size);
 
-#else /* !ENABLE_ASN1 */
-
-// Stub functions when ASN.1 is not available
-static inline const char* rtl433_asn1_get_version(void) {
-    return "ASN.1 support not compiled";
-}
-
-#endif /* ENABLE_ASN1 */
+// End of ASN.1 interface
 
 #ifdef __cplusplus
 }

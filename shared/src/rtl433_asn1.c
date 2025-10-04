@@ -25,6 +25,8 @@
 #include "PulsesData.h"
 #include "ModulationType.h"
 #include "RFParameters.h"
+#include "SignalQuality.h"
+#include "TimingInfo.h"
 #include "DeviceInfo.h"
 #include "DeviceData.h"
 #include "DeviceDataField.h"
@@ -160,11 +162,24 @@ rtl433_asn1_buffer_t rtl433_asn1_encode_signal(
                                                      (void**)&result.buffer);
     
     if (encoded_size < 0) {
+        fprintf(stderr, "❌ ASN.1 encoding failed\n");
         result.result = RTL433_ASN1_ERROR_ENCODE;
         result.buffer_size = 0;
     } else {
         result.buffer_size = encoded_size;
         result.result = RTL433_ASN1_OK;
+        
+        fprintf(stderr, "✅ ASN.1 encoding successful: %zu bytes\n", result.buffer_size);
+        
+        // 🔍 HEX DEBUG OUTPUT
+        if (result.buffer && result.buffer_size > 0) {
+            fprintf(stderr, "🔍 ASN.1 HEX (%zu bytes): ", result.buffer_size);
+            const unsigned char *bytes = (const unsigned char *)result.buffer;
+            for (size_t i = 0; i < result.buffer_size; i++) {
+                fprintf(stderr, "%02X", bytes[i]);
+            }
+            fprintf(stderr, "\n");
+        }
     }
     
     // Cleanup
@@ -188,7 +203,7 @@ rtl433_asn1_buffer_t rtl433_asn1_encode_signal_multi(
     rtl433_asn1_buffer_t result = {0};
     
     // Validate input
-    if (hex_strings_count > 32) {
+    if (hex_strings_count > RTL433_ASN1_HEX_STRINGS_MAX_COUNT) {
         result.result = RTL433_ASN1_ERROR_INVALID_DATA;
         return result;
     }
@@ -271,11 +286,24 @@ rtl433_asn1_buffer_t rtl433_asn1_encode_signal_multi(
                                                      (void**)&result.buffer);
     
     if (encoded_size < 0) {
+        fprintf(stderr, "❌ ASN.1 encoding failed\n");
         result.result = RTL433_ASN1_ERROR_ENCODE;
         result.buffer_size = 0;
     } else {
         result.buffer_size = encoded_size;
         result.result = RTL433_ASN1_OK;
+        
+        fprintf(stderr, "✅ ASN.1 encoding successful: %zu bytes\n", result.buffer_size);
+        
+        // 🔍 HEX DEBUG OUTPUT
+        if (result.buffer && result.buffer_size > 0) {
+            fprintf(stderr, "🔍 ASN.1 HEX (%zu bytes): ", result.buffer_size);
+            const unsigned char *bytes = (const unsigned char *)result.buffer;
+            for (size_t i = 0; i < result.buffer_size; i++) {
+                fprintf(stderr, "%02X", bytes[i]);
+            }
+            fprintf(stderr, "\n");
+        }
     }
     
     // Cleanup
@@ -375,11 +403,24 @@ rtl433_asn1_buffer_t rtl433_asn1_encode_detected(
                                                      (void**)&result.buffer);
     
     if (encoded_size < 0) {
+        fprintf(stderr, "❌ ASN.1 encoding failed\n");
         result.result = RTL433_ASN1_ERROR_ENCODE;
         result.buffer_size = 0;
     } else {
         result.buffer_size = encoded_size;
         result.result = RTL433_ASN1_OK;
+        
+        fprintf(stderr, "✅ ASN.1 encoding successful: %zu bytes\n", result.buffer_size);
+        
+        // 🔍 HEX DEBUG OUTPUT
+        if (result.buffer && result.buffer_size > 0) {
+            fprintf(stderr, "🔍 ASN.1 HEX (%zu bytes): ", result.buffer_size);
+            const unsigned char *bytes = (const unsigned char *)result.buffer;
+            for (size_t i = 0; i < result.buffer_size; i++) {
+                fprintf(stderr, "%02X", bytes[i]);
+            }
+            fprintf(stderr, "\n");
+        }
     }
     
     // Cleanup
@@ -529,10 +570,26 @@ rtl433_asn1_result_t rtl433_asn1_decode_signal_to_pulse_data(
         }
     }
     
-    // Extract timing info if available
+    // Extract timing info if available (including FSK/OOK estimates)
     if (signal_msg->timingInfo) {
         if (signal_msg->timingInfo->offset) {
             pulse_data->offset = *(signal_msg->timingInfo->offset);
+        }
+        
+        // Extract FSK estimates
+        if (signal_msg->timingInfo->fskF1Est) {
+            pulse_data->fsk_f1_est = *(signal_msg->timingInfo->fskF1Est);
+        }
+        if (signal_msg->timingInfo->fskF2Est) {
+            pulse_data->fsk_f2_est = *(signal_msg->timingInfo->fskF2Est);
+        }
+        
+        // Extract OOK estimates
+        if (signal_msg->timingInfo->ookLowEstimate) {
+            pulse_data->ook_low_estimate = *(signal_msg->timingInfo->ookLowEstimate);
+        }
+        if (signal_msg->timingInfo->ookHighEstimate) {
+            pulse_data->ook_high_estimate = *(signal_msg->timingInfo->ookHighEstimate);
         }
     }
     
@@ -629,13 +686,46 @@ rtl433_asn1_buffer_t rtl433_asn1_encode_pulse_data_to_signal(
         }
     }
     
-    // Set timing info if available
-    if (pulse_data->offset != 0) {
+    // Set timing info if available (including FSK/OOK estimates)
+    if (pulse_data->offset != 0 || pulse_data->fsk_f1_est != 0 || pulse_data->fsk_f2_est != 0 || 
+        pulse_data->ook_low_estimate != 0 || pulse_data->ook_high_estimate != 0) {
+        
         signal_msg->timingInfo = calloc(1, sizeof(TimingInfo_t));
         if (signal_msg->timingInfo) {
-            signal_msg->timingInfo->offset = calloc(1, sizeof(long));
-            if (signal_msg->timingInfo->offset) {
-                *(signal_msg->timingInfo->offset) = pulse_data->offset;
+            // Set offset if available
+            if (pulse_data->offset != 0) {
+                signal_msg->timingInfo->offset = calloc(1, sizeof(long));
+                if (signal_msg->timingInfo->offset) {
+                    *(signal_msg->timingInfo->offset) = pulse_data->offset;
+                }
+            }
+            
+            // Set FSK estimates
+            if (pulse_data->fsk_f1_est != 0) {
+                signal_msg->timingInfo->fskF1Est = calloc(1, sizeof(long));
+                if (signal_msg->timingInfo->fskF1Est) {
+                    *(signal_msg->timingInfo->fskF1Est) = pulse_data->fsk_f1_est;
+                }
+            }
+            if (pulse_data->fsk_f2_est != 0) {
+                signal_msg->timingInfo->fskF2Est = calloc(1, sizeof(long));
+                if (signal_msg->timingInfo->fskF2Est) {
+                    *(signal_msg->timingInfo->fskF2Est) = pulse_data->fsk_f2_est;
+                }
+            }
+            
+            // Set OOK estimates  
+            if (pulse_data->ook_low_estimate != 0) {
+                signal_msg->timingInfo->ookLowEstimate = calloc(1, sizeof(long));
+                if (signal_msg->timingInfo->ookLowEstimate) {
+                    *(signal_msg->timingInfo->ookLowEstimate) = pulse_data->ook_low_estimate;
+                }
+            }
+            if (pulse_data->ook_high_estimate != 0) {
+                signal_msg->timingInfo->ookHighEstimate = calloc(1, sizeof(long));
+                if (signal_msg->timingInfo->ookHighEstimate) {
+                    *(signal_msg->timingInfo->ookHighEstimate) = pulse_data->ook_high_estimate;
+                }
             }
         }
     }
@@ -650,11 +740,24 @@ rtl433_asn1_buffer_t rtl433_asn1_encode_pulse_data_to_signal(
                                                      (void**)&result.buffer);
     
     if (encoded_size < 0) {
+        fprintf(stderr, "❌ ASN.1 encoding failed\n");
         result.result = RTL433_ASN1_ERROR_ENCODE;
         result.buffer_size = 0;
     } else {
         result.buffer_size = encoded_size;
         result.result = RTL433_ASN1_OK;
+        
+        fprintf(stderr, "✅ ASN.1 encoding successful: %zu bytes\n", result.buffer_size);
+        
+        // 🔍 HEX DEBUG OUTPUT
+        if (result.buffer && result.buffer_size > 0) {
+            fprintf(stderr, "🔍 ASN.1 HEX (%zu bytes): ", result.buffer_size);
+            const unsigned char *bytes = (const unsigned char *)result.buffer;
+            for (size_t i = 0; i < result.buffer_size; i++) {
+                fprintf(stderr, "%02X", bytes[i]);
+            }
+            fprintf(stderr, "\n");
+        }
     }
     
     // Cleanup

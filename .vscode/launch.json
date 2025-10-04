@@ -1,0 +1,32 @@
+{
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "Debug rtl_433_client",
+            "type": "cppdbg",
+            "request": "launch",
+            "program": "${workspaceFolder}/build/rtl_433_client",
+            "args": [
+                "-f", "433.92M",
+                "-R", "132", 
+                "-X", "n=hexstring,s={hex_string}",
+                "-F log", "-F json",
+                "-F", "rabbitmq://localhost:5672/rtl_433"
+            ],
+            "stopAtEntry": false,
+            "cwd": "${workspaceFolder}/build",
+            "environment": [],
+            "externalConsole": false,
+            "MIMode": "gdb",
+            "setupCommands": [
+                {
+                    "description": "Enable pretty-printing for gdb",
+                    "text": "-enable-pretty-printing",
+                    "ignoreFailures": true
+                }
+            ],
+        //    "preLaunchTask": "make rtl_433_client",
+            "miDebuggerPath": "/usr/bin/gdb"
+        }
+    ]
+}

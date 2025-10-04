@@ -29,6 +29,30 @@ foreach(testSrc bitbuffer.c fileformat.c optparse.c bit_util.c)
 endforeach(testSrc)
 
 ########################################################################
+# Define ASN.1 tests
+########################################################################
+if(ENABLE_ASN1)
+    add_executable(test_asn1_decoder test_asn1_decoder.c)
+    target_link_libraries(test_asn1_decoder rtl433_shared r_asn1 m json-c)
+    target_include_directories(test_asn1_decoder PRIVATE 
+        ../shared/include 
+        ../include
+        ${ASN1_INCLUDE_DIRS})
+    add_test(asn1_decoder_test test_asn1_decoder)
+    
+    
+    # Standalone encode/decode test (no RabbitMQ) - DISABLED due to complex dependencies
+    # add_executable(test_asn1_encode_decode ../test_asn1_encode_decode.c)
+    # target_link_libraries(test_asn1_encode_decode rtl433_shared r_asn1 data m)
+    # target_include_directories(test_asn1_encode_decode PRIVATE 
+    #     ../shared/include
+    #     ../include
+    #     ${ASN1_INCLUDE_DIRS}
+    # )
+    # add_test(asn1_encode_decode_test test_asn1_encode_decode)
+endif()
+
+########################################################################
 # Define integration tests
 ########################################################################
 add_test(rtl_433_help ../src/rtl_433 -h)

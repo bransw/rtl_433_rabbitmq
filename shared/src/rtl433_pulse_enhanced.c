@@ -57,7 +57,7 @@ data_t *rtl433_pulse_data_print_data_enhanced(pulse_data_t const *data)
             "ook_low_estimate", "", DATA_INT,    data->ook_low_estimate,
             "ook_high_estimate","", DATA_INT,    data->ook_high_estimate,
             "fsk_f1_est",       "", DATA_INT,    data->fsk_f1_est,
-            "fsk_f2_est_value", "", DATA_INT,    data->fsk_f2_est,
+            "fsk_f2_est", "", DATA_INT,    data->fsk_f2_est,
             // Enhanced field with hex_string (URL removed as requested)
             "hex_string",       "", DATA_STRING, hex_string,
             NULL);
