@@ -4,6 +4,23 @@
  */
 
 #include "rtl433_asn1_pulse.h"
+#include "rtl433_signal.h"
+#include "rtl433_rfraw.h"
+#include <json-c/json.h>
+#include "../../include/pulse_data.h"
+
+// ASN.1 generated headers
+#include "RTL433Message.h"
+#include "SignalMessage.h"
+#include "PulsesData.h" 
+#include "SignalData.h"
+#include "ModulationType.h"
+#include "RFParameters.h"
+#include "SignalQuality.h"
+#include "TimingInfo.h"
+#include "asn_application.h"
+#include "per_encoder.h"
+#include "per_decoder.h"
 
 // === pulse_data_ex_t Management Functions ===
 
@@ -13,6 +30,7 @@ void pulse_data_ex_init(pulse_data_ex_t *data_ex) {
     data_ex->hex_string = NULL;
     data_ex->modulation_type = NULL;
     data_ex->timestamp_str = NULL;
+    data_ex->package_id = 0;  // 0 = not set
 }
 
 void pulse_data_ex_free(pulse_data_ex_t *data_ex) {
@@ -103,7 +121,193 @@ const char* pulse_data_ex_get_timestamp_str(const pulse_data_ex_t *data_ex) {
     return data_ex->timestamp_str;
 }
 
+int pulse_data_ex_set_package_id(pulse_data_ex_t *data_ex, uint32_t package_id) {
+    if (!data_ex) return -1;
+    data_ex->package_id = package_id;
+    return 0;
+}
+
+uint32_t pulse_data_ex_get_package_id(const pulse_data_ex_t *data_ex) {
+    if (!data_ex) return 0;
+    return data_ex->package_id;
+}
+
 // === Hex String Utility Functions ===
+
+// Helper functions for parsing hex strings (adapted from src/rfraw.c)
+static int hexstr_get_nibble_local(char const **p)
+{
+    if (!p || !*p || !**p) return -1;
+    while (**p == ' ' || **p == '\t' || **p == '-' || **p == ':') ++*p;
+
+    int c = **p;
+    if (c >= '0' && c <= '9') {
+        ++*p;
+        return c - '0';
+    }
+    if (c >= 'A' && c <= 'F') {
+        ++*p;
+        return c - 'A' + 10;
+    }
+    if (c >= 'a' && c <= 'f') {
+        ++*p;
+        return c - 'a' + 10;
+    }
+    return -1;
+}
+
+static int hexstr_get_byte_local(char const **p)
+{
+    int h = hexstr_get_nibble_local(p);
+    int l = hexstr_get_nibble_local(p);
+    if (h >= 0 && l >= 0)
+        return (h << 4) | l;
+    return -1;
+}
+
+static int hexstr_get_word_local(char const **p)
+{
+    int h = hexstr_get_byte_local(p);
+    int l = hexstr_get_byte_local(p);
+    if (h >= 0 && l >= 0)
+        return (h << 8) | l;
+    return -1;
+}
+
+static int hexstr_peek_byte_local(char const *p)
+{
+    int h = hexstr_get_nibble_local(&p);
+    int l = hexstr_get_nibble_local(&p);
+    if (h >= 0 && l >= 0)
+        return (h << 4) | l;
+    return -1;
+}
+
+// Parse rfraw format and extract ONLY pulses, preserving all other fields
+static bool parse_rfraw_pulses_only(pulse_data_t *data, char const **p)
+{
+    if (!p || !*p || !**p) return false;
+
+    int hdr = hexstr_get_byte_local(p);
+    if (hdr != 0xaa) return false;
+
+    int fmt = hexstr_get_byte_local(p);
+    if (fmt != 0xb0 && fmt != 0xb1)
+        return false;
+
+    if (fmt == 0xb0) {
+        hexstr_get_byte_local(p); // ignore len
+    }
+
+    int bins_len = hexstr_get_byte_local(p);
+    if (bins_len > 8) return false;
+
+    int repeats = 1;
+    if (fmt == 0xb0) {
+        repeats = hexstr_get_byte_local(p);
+    }
+
+    int bins[8] = {0};
+    for (int i = 0; i < bins_len; ++i) {
+        bins[i] = hexstr_get_word_local(p);
+    }
+
+    // check if this is the old or new format
+    bool oldfmt = true;
+    char const *t = *p;
+    while (*t) {
+        int b = hexstr_get_byte_local(&t);
+        if (b < 0 || b == 0x55) {
+            break;
+        }
+        if (b & 0x88) {
+            oldfmt = false;
+            break;
+        }
+    }
+
+    // Save original num_pulses to track how many we add
+    unsigned prev_pulses = data->num_pulses;
+    bool pulse_needed = true;
+    bool aligned = true;
+    
+    while (*p) {
+        if (aligned && hexstr_peek_byte_local(*p) == 0x55) {
+            hexstr_get_byte_local(p); // consume 0x55
+            break;
+        }
+
+        int w = hexstr_get_nibble_local(p);
+        aligned = !aligned;
+        if (w < 0) return false;
+        
+        if (data->num_pulses >= PD_MAX_PULSES) {
+            printf("⚠️ Maximum pulses reached (%d), stopping\n", PD_MAX_PULSES);
+            break;
+        }
+        
+        if (w >= 8 || (oldfmt && !aligned)) { // pulse
+            if (!pulse_needed) {
+                data->gap[data->num_pulses] = 0;
+                data->num_pulses++;
+                if (data->num_pulses >= PD_MAX_PULSES) break;
+            }
+            data->pulse[data->num_pulses] = bins[w & 7];
+            pulse_needed = false;
+        }
+        else { // gap
+            if (pulse_needed) {
+                data->pulse[data->num_pulses] = 0;
+            }
+            data->gap[data->num_pulses] = bins[w];
+            data->num_pulses++;
+            pulse_needed = true;
+        }
+    }
+
+    unsigned pkt_pulses = data->num_pulses - prev_pulses;
+    for (int i = 1; i < repeats && data->num_pulses + pkt_pulses <= PD_MAX_PULSES; ++i) {
+        memcpy(&data->pulse[data->num_pulses], &data->pulse[prev_pulses], pkt_pulses * sizeof(*data->pulse));
+        memcpy(&data->gap[data->num_pulses], &data->gap[prev_pulses], pkt_pulses * sizeof(*data->gap));
+        data->num_pulses += pkt_pulses;
+    }
+
+    // DO NOT modify sample_rate or any other fields - only pulses!
+    printf("🔧 rfraw_parse_pulses_only: extracted %u pulses, preserved all other fields\n", 
+           data->num_pulses - prev_pulses);
+    
+    return true;
+}
+
+// Parse rfraw format and extract ONLY pulses, preserving all other fields
+bool rfraw_parse_pulses_only(pulse_data_t *data, char const *p)
+{
+    if (!p || !*p)
+        return false;
+
+    printf("🔧 rfraw_parse_pulses_only: parsing hex string for pulses only\n");
+    
+    // Save original num_pulses
+    unsigned original_num_pulses = data->num_pulses;
+    
+    while (*p) {
+        // skip whitespace and separators
+        while (*p == ' ' || *p == '\t' || *p == '\r' || *p == '\n' || *p == '+' || *p == '-')
+            ++p;
+
+        if (!parse_rfraw_pulses_only(data, &p))
+            break;
+    }
+    
+    if (data->num_pulses > original_num_pulses) {
+        printf("✅ rfraw_parse_pulses_only: successfully extracted %u pulses\n", 
+               data->num_pulses - original_num_pulses);
+        return true;
+    } else {
+        printf("❌ rfraw_parse_pulses_only: no pulses extracted\n");
+        return false;
+    }
+}
 
 char** split_hex_string(const char *hex_string, int *count) {
     if (!hex_string || !count) {
@@ -263,8 +467,8 @@ RTL433Message_t *prepare_pulse_data(pulse_data_ex_t *pulse_ex) {
     
     pulse_data_t *pulse = &pulse_ex->pulse_data;
     
-    printf("🔄 Preparing RTL433Message from pulse_data_ex (offset: %lu, pulses: %u)\n", 
-           pulse->offset, pulse->num_pulses);
+    printf("🔄 Preparing RTL433Message: offset=%lu, pulses=%u, freq=%.0f Hz, rate=%u Hz\n", 
+           pulse->offset, pulse->num_pulses, pulse->centerfreq_hz, pulse->sample_rate);
     
     // Create RTL433Message wrapper
     RTL433Message_t *rtl433_msg = calloc(1, sizeof(RTL433Message_t));
@@ -281,10 +485,16 @@ RTL433Message_t *prepare_pulse_data(pulse_data_ex_t *pulse_ex) {
         return NULL;
     }
     
-    // packageId is independent - can be set separately if needed
-    // For now, we don't set packageId automatically - it should be set by caller if needed
-    signal_msg->packageId = NULL; // No automatic package ID
-    printf("📦 No automatic packageId set (independent from offset)\n");
+    // Set packageId from pulse_data_ex if available
+    if (pulse_ex->package_id > 0) {
+        signal_msg->packageId = calloc(1, sizeof(unsigned long));
+        if (signal_msg->packageId) {
+            *(signal_msg->packageId) = (unsigned long)pulse_ex->package_id;
+            printf("📦 Setting packageId: %u\n", pulse_ex->package_id);
+        }
+    } else {
+        signal_msg->packageId = NULL;
+    }
     
     // Set timestamp if available
     if (pulse_ex->timestamp_str && strlen(pulse_ex->timestamp_str) > 0) {
@@ -305,17 +515,15 @@ RTL433Message_t *prepare_pulse_data(pulse_data_ex_t *pulse_ex) {
     
     // Set pulses data
     pulses_data->count = pulse->num_pulses;
-    pulses_data->sampleRate = pulse->sample_rate;
     
-    // Fill pulses array ONLY if no hex_string is present
-    if (!pulse_ex->hex_string || strlen(pulse_ex->hex_string) == 0) {
-        if (pulse->num_pulses > 0) {
-            for (unsigned int i = 0; i < pulse->num_pulses; i++) {
-                long *pulse_val = calloc(1, sizeof(long));
-                if (pulse_val) {
-                    *pulse_val = pulse->pulse[i];
-                    ASN_SEQUENCE_ADD(&pulses_data->pulses.list, pulse_val);
-                }
+    // Fill pulses array ALWAYS - both hex_string and pulses are needed for device detection
+    if (pulse->num_pulses > 0) {
+        printf("📦 Adding %u pulses to ASN.1 structure\n", pulse->num_pulses);
+        for (unsigned int i = 0; i < pulse->num_pulses; i++) {
+            long *pulse_val = calloc(1, sizeof(long));
+            if (pulse_val) {
+                *pulse_val = pulse->pulse[i];
+                ASN_SEQUENCE_ADD(&pulses_data->pulses.list, pulse_val);
             }
         }
     }
@@ -415,6 +623,9 @@ RTL433Message_t *prepare_pulse_data(pulse_data_ex_t *pulse_ex) {
         }
     }
     
+    // Set sample rate in SignalMessage
+    signal_msg->sampleRate = pulse->sample_rate;
+    
     // Set signal quality (these are pointers in ASN.1, need to allocate)
     signal_msg->signalQuality = calloc(1, sizeof(SignalQuality_t));
     if (signal_msg->signalQuality) {
@@ -436,6 +647,18 @@ RTL433Message_t *prepare_pulse_data(pulse_data_ex_t *pulse_ex) {
             printf("📍 Setting offset in TimingInfo: %lu (independent from packageId)\n", *(signal_msg->timingInfo->offset));
         }
         
+        // Set start_ago and end_ago (critical for device detection)
+        signal_msg->timingInfo->startAgo = calloc(1, sizeof(unsigned long));
+        if (signal_msg->timingInfo->startAgo) {
+            *(signal_msg->timingInfo->startAgo) = (unsigned long)pulse->start_ago;
+            printf("📍 Setting start_ago in TimingInfo: %u\n", pulse->start_ago);
+        }
+        signal_msg->timingInfo->endAgo = calloc(1, sizeof(unsigned long));
+        if (signal_msg->timingInfo->endAgo) {
+            *(signal_msg->timingInfo->endAgo) = (unsigned long)pulse->end_ago;
+            printf("📍 Setting end_ago in TimingInfo: %u\n", pulse->end_ago);
+        }
+        
         signal_msg->timingInfo->ookLowEstimate = calloc(1, sizeof(long));
         signal_msg->timingInfo->ookHighEstimate = calloc(1, sizeof(long));
         signal_msg->timingInfo->fskF1Est = calloc(1, sizeof(long));
@@ -450,9 +673,8 @@ RTL433Message_t *prepare_pulse_data(pulse_data_ex_t *pulse_ex) {
     rtl433_msg->present = RTL433Message_PR_signalMessage;
     rtl433_msg->choice.signalMessage = *signal_msg;
     
-    // Clean up temporary structures (but not the data they point to)
-    free(pulses_data);
-    free(signal_msg);
+    // Don't free signal_msg and pulses_data here - they're now part of rtl433_msg
+    // The ASN.1 structure will handle cleanup when ASN_STRUCT_FREE is called
     
     return rtl433_msg;
 }
@@ -470,7 +692,8 @@ pulse_data_ex_t *extract_pulse_data(RTL433Message_t *rtl433_msg) {
     
     SignalMessage_t *signal_msg = &rtl433_msg->choice.signalMessage;
     
-    printf("🔄 Extracting pulse_data_ex from RTL433Message (packageId: %lu)\n", signal_msg->packageId);
+    printf("🔄 Extracting pulse_data_ex from RTL433Message (packageId: %s)\n", 
+           signal_msg->packageId ? "present" : "not present");
     
     // Allocate pulse_data_ex_t
     pulse_data_ex_t *pulse_data_ex = calloc(1, sizeof(pulse_data_ex_t));
@@ -484,52 +707,73 @@ pulse_data_ex_t *extract_pulse_data(RTL433Message_t *rtl433_msg) {
     // Extract basic fields
     pulse_data->centerfreq_hz = signal_msg->frequency.centerFreq;
     
-    // packageId is independent - not related to offset
-    if (signal_msg->packageId) {
-        printf("📦 PackageId present: %lu (stored separately, not used for offset)\n", *(signal_msg->packageId));
-        // packageId is just a message sequence number, not used for pulse_data
-    } else {
-        printf("📦 No packageId present\n");
+    // Extract sample rate from SignalMessage
+    pulse_data->sample_rate = signal_msg->sampleRate;
+    printf("📡 Extracted sample rate: %lu Hz, centerfreq: %.0f Hz\n", 
+           signal_msg->sampleRate, pulse_data->centerfreq_hz);
+    
+    // Extract frequencies (avoid duplicates)
+    if (signal_msg->frequency.freq1) {
+        pulse_data->freq1_hz = *(signal_msg->frequency.freq1);
+        printf("📡 Extracted freq1_hz: %.0f Hz\n", pulse_data->freq1_hz);
+    }
+    if (signal_msg->frequency.freq2) {
+        pulse_data->freq2_hz = *(signal_msg->frequency.freq2);
+        printf("📡 Extracted freq2_hz: %.0f Hz\n", pulse_data->freq2_hz);
     }
     
-    // Initialize offset to 0
+    // Extract packageId to pulse_data_ex
+    if (signal_msg->packageId) {
+        pulse_data_ex->package_id = (uint32_t)(*(signal_msg->packageId));
+        printf("📦 Extracted packageId: %u\n", pulse_data_ex->package_id);
+    } else {
+        pulse_data_ex->package_id = 0;
+    }
+    
+    // Initialize offset to 0 (will be overwritten from TimingInfo if present)
     pulse_data->offset = 0;
     
     // Extract timestamp if present
     if (signal_msg->timestamp) {
-        // Convert epoch timestamp back to string format
         unsigned long epoch_value = *(signal_msg->timestamp);
-        
-        // Convert back to relative time format for rtl_433 compatibility
         const unsigned long base_epoch = 1704067200; // 2024-01-01 00:00:00 UTC
+        
         if (epoch_value >= base_epoch) {
             unsigned long relative_seconds = epoch_value - base_epoch;
             char timestamp_buffer[32];
             snprintf(timestamp_buffer, sizeof(timestamp_buffer), "@%lu.000s", relative_seconds);
             pulse_data_ex_set_timestamp_str(pulse_data_ex, timestamp_buffer);
-            printf("📅 Extracted epoch timestamp: %lu -> %s\n", epoch_value, timestamp_buffer);
+            printf("📅 Extracted timestamp: %lu -> %s\n", epoch_value, timestamp_buffer);
         } else {
-            // Direct epoch value
             char timestamp_buffer[32];
             snprintf(timestamp_buffer, sizeof(timestamp_buffer), "%lu", epoch_value);
             pulse_data_ex_set_timestamp_str(pulse_data_ex, timestamp_buffer);
-            printf("📅 Extracted epoch timestamp: %lu\n", epoch_value);
+            printf("📅 Extracted timestamp: %lu\n", epoch_value);
         }
-    }
-    
-    // Extract optional frequency fields
-    if (signal_msg->frequency.freq1) {
-        pulse_data->freq1_hz = *(signal_msg->frequency.freq1);
-    }
-    if (signal_msg->frequency.freq2) {
-        pulse_data->freq2_hz = *(signal_msg->frequency.freq2);
     }
     
     // Extract signal quality (check if pointer is not NULL)
     if (signal_msg->signalQuality) {
-        if (signal_msg->signalQuality->rssiDb) pulse_data->rssi_db = *(signal_msg->signalQuality->rssiDb);
-        if (signal_msg->signalQuality->snrDb) pulse_data->snr_db = *(signal_msg->signalQuality->snrDb);
-        if (signal_msg->signalQuality->noiseDb) pulse_data->noise_db = *(signal_msg->signalQuality->noiseDb);
+        if (signal_msg->signalQuality->rssiDb) {
+            pulse_data->rssi_db = *(signal_msg->signalQuality->rssiDb);
+            printf("📊 Extracted rssi_db: %.2f dB\n", pulse_data->rssi_db);
+        }
+        if (signal_msg->signalQuality->snrDb) {
+            pulse_data->snr_db = *(signal_msg->signalQuality->snrDb);
+            printf("📊 Extracted snr_db: %.2f dB\n", pulse_data->snr_db);
+        }
+        if (signal_msg->signalQuality->noiseDb) {
+            pulse_data->noise_db = *(signal_msg->signalQuality->noiseDb);
+            printf("📊 Extracted noise_db: %.2f dB\n", pulse_data->noise_db);
+        }
+        if (signal_msg->signalQuality->rangeDb) {
+            pulse_data->range_db = *(signal_msg->signalQuality->rangeDb);
+            printf("📊 Extracted range_db: %.2f dB\n", pulse_data->range_db);
+        }
+        if (signal_msg->signalQuality->depthBits) {
+            pulse_data->depth_bits = *(signal_msg->signalQuality->depthBits);
+            printf("📊 Extracted depth_bits: %u\n", pulse_data->depth_bits);
+        }
     }
     
     // Extract timing info (check if pointer is not NULL)
@@ -540,10 +784,39 @@ pulse_data_ex_t *extract_pulse_data(RTL433Message_t *rtl433_msg) {
             printf("📍 Extracted offset from TimingInfo: %lu\n", pulse_data->offset);
         }
         
-        if (signal_msg->timingInfo->ookLowEstimate) pulse_data->ook_low_estimate = *(signal_msg->timingInfo->ookLowEstimate);
-        if (signal_msg->timingInfo->ookHighEstimate) pulse_data->ook_high_estimate = *(signal_msg->timingInfo->ookHighEstimate);
-        if (signal_msg->timingInfo->fskF1Est) pulse_data->fsk_f1_est = *(signal_msg->timingInfo->fskF1Est);
-        if (signal_msg->timingInfo->fskF2Est) pulse_data->fsk_f2_est = *(signal_msg->timingInfo->fskF2Est);
+        // Extract start_ago and end_ago (critical for device detection)
+        if (signal_msg->timingInfo->startAgo) {
+            pulse_data->start_ago = *(signal_msg->timingInfo->startAgo);
+            printf("📍 Extracted start_ago from TimingInfo: %u\n", pulse_data->start_ago);
+        } else {
+            printf("⚠️ startAgo pointer is NULL\n");
+            pulse_data->start_ago = 0;
+        }
+        if (signal_msg->timingInfo->endAgo) {
+            pulse_data->end_ago = *(signal_msg->timingInfo->endAgo);
+            printf("📍 Extracted end_ago from TimingInfo: %u\n", pulse_data->end_ago);
+        } else {
+            printf("⚠️ endAgo pointer is NULL\n");
+            pulse_data->end_ago = 0;
+        }
+        
+        // Extract timing estimates
+        if (signal_msg->timingInfo->ookLowEstimate) {
+            pulse_data->ook_low_estimate = *(signal_msg->timingInfo->ookLowEstimate);
+            printf("📊 Extracted ook_low_estimate: %d\n", pulse_data->ook_low_estimate);
+        }
+        if (signal_msg->timingInfo->ookHighEstimate) {
+            pulse_data->ook_high_estimate = *(signal_msg->timingInfo->ookHighEstimate);
+            printf("📊 Extracted ook_high_estimate: %d\n", pulse_data->ook_high_estimate);
+        }
+        if (signal_msg->timingInfo->fskF1Est) {
+            pulse_data->fsk_f1_est = *(signal_msg->timingInfo->fskF1Est);
+            printf("📊 Extracted fsk_f1_est: %d\n", pulse_data->fsk_f1_est);
+        }
+        if (signal_msg->timingInfo->fskF2Est) {
+            pulse_data->fsk_f2_est = *(signal_msg->timingInfo->fskF2Est);
+            printf("📊 Extracted fsk_f2_est: %d\n", pulse_data->fsk_f2_est);
+        }
     }
     
     // Extract modulation type
@@ -598,6 +871,13 @@ pulse_data_ex_t *extract_pulse_data(RTL433Message_t *rtl433_msg) {
             pulse_data_ex_set_hex_string(pulse_data_ex, hex_string);
             printf("📦 Reconstructed hex_string: %.100s%s\n", 
                    hex_string, strlen(hex_string) > 100 ? "..." : "");
+            
+            // Try to parse hex_string as rfraw format to reconstruct pulses
+            if (pulse_data->num_pulses == 0) {
+                printf("🔄 Multiple hex_strings present but no pulses reconstructed - keeping as signal data only\n");
+                printf("📦 Skipping pulse reconstruction to preserve ASN.1 extracted fields\n");
+            }
+            
             free(hex_string);
         }
         
@@ -618,6 +898,13 @@ pulse_data_ex_t *extract_pulse_data(RTL433Message_t *rtl433_msg) {
                 pulse_data_ex_set_hex_string(pulse_data_ex, hex_string);
                 printf("📦 Extracted hex_string: %.100s%s\n", 
                        hex_string, strlen(hex_string) > 100 ? "..." : "");
+                
+                // Try to parse hex_string as rfraw format to reconstruct pulses
+                if (pulse_data->num_pulses == 0) {
+                    printf("🔄 hex_string present but no pulses reconstructed - keeping as signal data only\n");
+                    printf("📦 Skipping pulse reconstruction to preserve ASN.1 extracted fields\n");
+                }
+                
                 free(hex_string);
             }
         }
@@ -628,7 +915,6 @@ pulse_data_ex_t *extract_pulse_data(RTL433Message_t *rtl433_msg) {
         printf("📦 Extracting %d pulses from SignalData\n", pulses_data->pulses.list.count);
         
         pulse_data->num_pulses = pulses_data->pulses.list.count;
-        pulse_data->sample_rate = pulses_data->sampleRate;
         
         if (pulse_data->num_pulses > PD_MAX_PULSES) {
             printf("⚠️  Warning: truncating %u pulses to %d\n", 
@@ -1158,14 +1444,16 @@ void decode_hex_asn1(const char *hex_string, bool use_rtl433_wrapper) {
         if (rtl433_msg->present == RTL433Message_PR_signalMessage) {
             SignalMessage_t *signal_msg = &rtl433_msg->choice.signalMessage;
             printf("📊 SignalMessage details:\n");
-            printf("  Package ID: %lu\n", signal_msg->packageId);
-            printf("  Center freq: %.0f Hz\n", signal_msg->frequency.centerFreq);
+            printf("  Package ID: %s\n", signal_msg->packageId ? 
+                   (signal_msg->packageId ? "present" : "not present") : "not present");
+            printf("  Center freq: %.0f Hz\n", (double)signal_msg->frequency.centerFreq);
             printf("  Modulation: %ld\n", signal_msg->modulation);
             
             if (signal_msg->signalData.present == SignalData_PR_pulsesArray) {
                 PulsesData_t *pulses_data = &signal_msg->signalData.choice.pulsesArray;
                 printf("  Pulse count: %ld\n", pulses_data->count);
-                printf("  Sample rate: %lu Hz\n", pulses_data->sampleRate);
+                // sampleRate is now in SignalMessage, not in PulsesData
+                printf("  Sample rate: %lu Hz\n", signal_msg->sampleRate);
                 
                 printf("  First 10 pulses: ");
                 int pulse_count = pulses_data->pulses.list.count;
