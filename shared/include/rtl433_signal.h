@@ -20,21 +20,111 @@ extern "C" {
 
 // === SIGNAL RECONSTRUCTION ===
 
-/// Reconstruct pulse_data from hex string with full metadata
+/**
+ * Reconstruct pulse_data from hex string with full metadata
+ * 
+ * ВАЖНО: Функция ПОЛНОСТЬЮ ОЧИЩАЕТ pulse_data через memset()!
+ * Все существующие метаданные будут потеряны.
+ * 
+ * @param hex_str        ASCII hex-строка в rfraw формате (например, "AAB10400...")
+ *                       Должна начинаться с 0xAAB0 или 0xAAB1
+ * @param pulse_data     Выходная структура для восстановленных пульсов (будет очищена)
+ * @param json_metadata  JSON-строка с метаданными (может быть NULL)
+ *                       Поддерживаемые поля: freq_Hz, rate_Hz, rssi_dB, snr_dB, 
+ *                       noise_dB, mod, pulses
+ * @return 0 при успехе, -1 при ошибке
+ * 
+ * Алгоритм:
+ * 1. memset(pulse_data, 0) - УНИЧТОЖАЕТ ВСЕ ДАННЫЕ!
+ * 2. rtl433_signal_set_defaults() - устанавливает sample_rate=250000
+ * 3. rfraw_check() - проверяет формат hex-строки
+ * 4. rfraw_parse() - извлекает пульсы (устанавливает sample_rate=1000000!)
+ * 5. rtl433_signal_reconstruct_from_json() - применяет метаданные из JSON
+ * 
+ * НЕ ИСПОЛЬЗОВАТЬ если pulse_data уже содержит метаданные!
+ * Для таких случаев вызывайте rfraw_parse() напрямую.
+ */
 int rtl433_signal_reconstruct_from_hex(const char *hex_str, 
                                       pulse_data_t *pulse_data,
                                       const char *json_metadata);
 
-/// Reconstruct pulse_data from JSON
+/**
+ * Reconstruct pulse_data from JSON
+ * 
+ * Применяет метаданные из JSON к существующей структуре pulse_data.
+ * НЕ очищает pulse_data, только обновляет поля.
+ * 
+ * @param json_str    JSON-строка с метаданными
+ * @param pulse_data  Структура для заполнения (существующие данные сохраняются)
+ * @return 0 при успехе, -1 при ошибке
+ * 
+ * Поддерживаемые поля JSON:
+ * - rate_Hz (uint32_t) → sample_rate
+ * - freq_Hz (double) → centerfreq_hz
+ * - freq1_Hz (double) → freq1_hz
+ * - freq2_Hz (double) → freq2_hz
+ * - rssi_dB (double) → rssi_db
+ * - snr_dB (double) → snr_db
+ * - noise_dB (double) → noise_db
+ * - mod (string: "FSK"/"OOK") → устанавливает FSK/OOK параметры
+ * - pulses (array) → pulse[] и gap[] массивы
+ */
 int rtl433_signal_reconstruct_from_json(const char *json_str, pulse_data_t *pulse_data);
 
-/// Copy all critical pulse_data fields
+/**
+ * Copy all critical pulse_data fields
+ * 
+ * Копирует ВСЕ метаданные (но НЕ сами пульсы) из src в dst.
+ * 
+ * @param src  Источник метаданных
+ * @param dst  Назначение для копирования
+ * @return 0 при успехе, -1 при ошибке
+ * 
+ * Копируемые поля:
+ * - offset, sample_rate, depth_bits
+ * - start_ago, end_ago
+ * - ook_low_estimate, ook_high_estimate
+ * - fsk_f1_est, fsk_f2_est
+ * - freq1_hz, freq2_hz, centerfreq_hz
+ * - range_db, rssi_db, snr_db, noise_db
+ * 
+ * НЕ копируются: num_pulses, pulse[], gap[]
+ */
 int rtl433_signal_copy_metadata(const pulse_data_t *src, pulse_data_t *dst);
 
-/// Validate pulse_data for proper decoder operation
+/**
+ * Validate pulse_data for proper decoder operation
+ * 
+ * Проверяет корректность структуры pulse_data перед декодированием.
+ * 
+ * @param pulse_data  Структура для проверки
+ * @return true если валидна, false иначе
+ * 
+ * Проверки:
+ * - sample_rate != 0
+ * - 0 < num_pulses <= PD_MAX_PULSES
+ * - Все пульсы и гэпы >= 0
+ * - Пульсы в разумных пределах: 1 мкс < pulse < 100 мс
+ */
 bool rtl433_signal_validate_pulse_data(const pulse_data_t *pulse_data);
 
-/// Set default values for pulse_data
+/**
+ * Set default values for pulse_data
+ * 
+ * Устанавливает значения по умолчанию для структуры pulse_data.
+ * 
+ * @param pulse_data   Структура для инициализации
+ * @param sample_rate  Частота дискретизации (0 = использовать 250000)
+ * 
+ * Устанавливаемые значения:
+ * - sample_rate = параметр или 250000
+ * - depth_bits = 8
+ * - offset = 0
+ * - start_ago = 0, end_ago = 0
+ * - ook_low_estimate = 1000, ook_high_estimate = 8000
+ * - fsk_f1_est = 0, fsk_f2_est = 0
+ * - range_db = 0.0
+ */
 void rtl433_signal_set_defaults(pulse_data_t *pulse_data, uint32_t sample_rate);
 
 // === АНАЛИЗ СИГНАЛОВ ===
@@ -147,10 +237,32 @@ int rtl433_signal_slice_pcm(const pulse_data_t *pulse_data, void *r_dev);
 /// Wrapper for pulse_analyzer
 int rtl433_signal_analyze(const pulse_data_t *pulse_data, rtl433_modulation_type_t mod_type, void *r_dev);
 
-/// Wrapper for rfraw_parse
+/**
+ * Wrapper for rfraw_parse
+ * 
+ * Обёртка для rfraw_parse() из rtl_433 core.
+ * Извлекает массив пульсов из hex-строки rfraw формата.
+ * 
+ * @param pulse_data  Структура для заполнения пульсами
+ * @param hex_str     ASCII hex-строка в rfraw формате
+ * @return 0 при успехе, -1 при ошибке
+ * 
+ * ВАЖНО: rfraw_parse() ВСЕГДА устанавливает sample_rate = 1000000!
+ * Если нужен другой sample_rate, восстановите его после вызова.
+ */
 int rtl433_signal_rfraw_parse(pulse_data_t *pulse_data, const char *hex_str);
 
-/// Wrapper for rfraw_check
+/**
+ * Wrapper for rfraw_check
+ * 
+ * Обёртка для rfraw_check() из rtl_433 core.
+ * Проверяет корректность формата hex-строки.
+ * 
+ * @param hex_str  ASCII hex-строка для проверки
+ * @return true если формат валиден, false иначе
+ * 
+ * Проверка: hex-строка должна начинаться с 0xAAB0 или 0xAAB1
+ */
 bool rtl433_signal_rfraw_check(const char *hex_str);
 
 #ifdef __cplusplus
