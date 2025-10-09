@@ -4,6 +4,7 @@
 
 #include "rtl433_input.h"
 #include "rtl433_transport.h"
+#include "rtl433_asn1_pulse.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -570,26 +571,21 @@ pulse_data_t* rtl433_input_parse_pulse_data_from_asn1(const uint8_t *asn1_data, 
     return NULL;
 #endif
 
-    // Allocate pulse_data structure
-    pulse_data_t *pulse_data = calloc(1, sizeof(pulse_data_t));
-    if (!pulse_data) {
-        printf("❌ Failed to allocate pulse_data structure\n");
-        return NULL;
+    // Use rtl433_asn1_pulse for decoding (new pulse-focused module)
+    rtl433_asn1_buffer_t buffer;
+    buffer.buffer = (uint8_t*)asn1_data;
+    buffer.buffer_size = data_size;
+    
+    // Decode using rtl433_asn1_pulse
+    pulse_data_t *pulse_data = decode(&buffer);
+    
+    if (pulse_data) {
+        printf("✅ Successfully decoded ASN.1 signal: %u pulses, %.0f Hz\n", 
+               pulse_data->num_pulses, pulse_data->centerfreq_hz);
+    } else {
+        printf("❌ Failed to decode ASN.1 signal\n");
     }
-
-    // Use ASN.1 decoding function to reconstruct pulse_data
-    rtl433_asn1_result_t result = rtl433_asn1_decode_signal_to_pulse_data(
-        asn1_data, data_size, pulse_data);
-
-    if (result != RTL433_ASN1_OK) {
-        printf("❌ Failed to decode ASN.1 signal data: %d\n", result);
-        free(pulse_data);
-        return NULL;
-    }
-
-    printf("✅ Successfully decoded ASN.1 signal: %u pulses, %.0f Hz\n", 
-           pulse_data->num_pulses, pulse_data->freq1_hz);
-
+    
     return pulse_data;
 }
 

@@ -10,7 +10,7 @@
 
 #include "rtl433_transport.h"
 #include "pulse_data.h"
-#include "rtl433_asn1.h"
+#include "rtl433_asn1_detect.h"
 
 #ifdef __cplusplus
 extern "C" {

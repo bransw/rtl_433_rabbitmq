@@ -13,19 +13,11 @@
 #include <stdbool.h>
 #include <json-c/json.h>
 #include "pulse_data.h"
+#include "rtl433_asn1_common.h"
 
-// ASN.1 generated headers
-#include "RTL433Message.h"
-#include "SignalMessage.h"
-#include "PulsesData.h"
-#include "SignalData.h"
-#include "ModulationType.h"
-#include "RFParameters.h"
-#include "SignalQuality.h"
-#include "TimingInfo.h"
-#include "asn_application.h"
-#include "per_encoder.h"
-#include "per_decoder.h"
+// ASN.1 generated headers (forward declarations to avoid conflicts)
+// These will be properly defined when ASN.1 headers are included in .c file
+typedef struct RTL433Message RTL433Message_t;
 
 #ifdef __cplusplus
 extern "C" {
@@ -33,27 +25,12 @@ extern "C" {
 
 // Extended pulse data structure with hex string support
 typedef struct pulse_data_ex {
-    pulse_data_t pulse_data;    // Embedded original structure
-    char *hex_string;           // Hex string representation (single or multiple signals separated by '+')
-    char *modulation_type;      // Modulation type string ("FSK", "OOK", "ASK", etc.)
-    char *timestamp_str;        // Timestamp string (e.g., "@0.262144s")
+    pulse_data_t pulse_data;        // Embedded original structure
+    char *hex_string;               // Hex string representation (single or multiple signals separated by '+')
+    char *modulation_type;          // Modulation type string ("FSK", "OOK", "ASK", etc.)
+    char *timestamp_str;            // Timestamp string (e.g., "@0.262144s")
+    uint32_t package_id;            // Package/message identifier (0 = not set)
 } pulse_data_ex_t;
-
-// Result codes for ASN.1 operations
-typedef enum {
-    RTL433_ASN1_OK = 0,
-    RTL433_ASN1_ERROR_MEMORY = 1,
-    RTL433_ASN1_ERROR_ENCODE = 2,
-    RTL433_ASN1_ERROR_DECODE = 3,
-    RTL433_ASN1_ERROR_INVALID_DATA = 4
-} rtl433_asn1_result_t;
-
-// Buffer structure for ASN.1 operations
-typedef struct {
-    void *buffer;
-    size_t buffer_size;
-    rtl433_asn1_result_t result;
-} rtl433_asn1_buffer_t;
 
 // === pulse_data_ex_t Management Functions ===
 
@@ -113,6 +90,21 @@ int pulse_data_ex_set_timestamp_str(pulse_data_ex_t *data_ex, const char *timest
  * @return Timestamp string or NULL
  */
 const char* pulse_data_ex_get_timestamp_str(const pulse_data_ex_t *data_ex);
+
+/**
+ * Set package ID in pulse_data_ex_t structure
+ * @param data_ex Pointer to pulse_data_ex_t structure
+ * @param package_id Package ID to set (0 = not set)
+ * @return 0 on success, -1 on error
+ */
+int pulse_data_ex_set_package_id(pulse_data_ex_t *data_ex, uint32_t package_id);
+
+/**
+ * Get package ID from pulse_data_ex_t structure
+ * @param data_ex Pointer to pulse_data_ex_t structure
+ * @return Package ID (0 = not set)
+ */
+uint32_t pulse_data_ex_get_package_id(const pulse_data_ex_t *data_ex);
 
 // === Hex String Utility Functions ===
 
@@ -217,6 +209,14 @@ void print_pulse_data_ex(const pulse_data_ex_t *pulse_data_ex);
  * @param use_rtl433_wrapper Whether to use RTL433Message wrapper
  */
 void decode_hex_asn1(const char *hex_string, bool use_rtl433_wrapper);
+
+/**
+ * Parse rfraw format and extract ONLY pulses, preserving all other fields
+ * @param data Pointer to pulse_data_t structure
+ * @param p Hex string to parse
+ * @return true if successful, false otherwise
+ */
+bool rfraw_parse_pulses_only(pulse_data_t *data, char const *p);
 
 #ifdef __cplusplus
 }

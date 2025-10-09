@@ -28,7 +28,7 @@
 #include "rtl433_config.h"
 
 // Include ASN.1 support
-#include "rtl433_asn1.h"
+#include "rtl433_asn1_pulse.h"
 
 // Global variable to access raw_mode from client
 extern int g_rtl433_raw_mode;
@@ -94,66 +94,7 @@ static void R_API_CALLCONV print_asn1_data(data_output_t *output, data_t *data, 
         int should_send = 0;
         
         if (data_model) {
-            // This is decoded device data - encode as DetectedMessage
-            target_queue = asn1_out->detected_queue;
-            
-            // Check -Q parameter: 0=both, 1=signals only, 2=detected only, 3=both
-            should_send = (g_rtl433_raw_mode == 0 || g_rtl433_raw_mode == 2 || g_rtl433_raw_mode == 3);
-            
-            if (!should_send) {
-                print_logf(LOG_DEBUG, "ASN1", "Skipping detected message due to -Q %d", g_rtl433_raw_mode);
-                return;
-            }
-            
-            // Extract device information
-            const char *model = (data_model->type == DATA_STRING) ? data_model->value.v_ptr : "unknown";
-            const char *device_type = NULL;
-            const char *device_id = NULL;
-            const char *protocol = NULL;
-            
-            // Collect key-value pairs for device data
-            char *data_fields[RTL433_ASN1_HEX_STRINGS_MAX_COUNT * 2];  // Max RTL433_ASN1_HEX_STRINGS_MAX_COUNT key-value pairs
-            size_t field_count = 0;
-            
-            for (data_t *d = data; d && field_count < (RTL433_ASN1_HEX_STRINGS_MAX_COUNT * 2 - 2); d = d->next) {
-                if (strcmp(d->key, "model") == 0) continue;  // Already handled
-                if (strcmp(d->key, "mod") == 0) continue;    // Skip mod field
-                
-                // Special fields
-                if (strcmp(d->key, "type") == 0 && d->type == DATA_STRING) {
-                    device_type = (const char*)d->value.v_ptr;
-                    continue;
-                }
-                if (strcmp(d->key, "id") == 0 && d->type == DATA_STRING) {
-                    device_id = (const char*)d->value.v_ptr;
-                    continue;
-                }
-                if (strcmp(d->key, "protocol") == 0 && d->type == DATA_STRING) {
-                    protocol = (const char*)d->value.v_ptr;
-                    continue;
-                }
-                
-                // Add as key-value pair (only string values for now)
-                if (d->type == DATA_STRING) {
-                    data_fields[field_count++] = (char*)d->key;
-                    data_fields[field_count++] = (char*)d->value.v_ptr;
-                }
-            }
-            
-            // Encode detected message
-            asn1_buffer = rtl433_asn1_encode_detected(
-                ++asn1_out->package_counter,  // package_id
-                NULL,                          // timestamp (auto-generated)
-                model,
-                device_type,
-                device_id,
-                protocol,
-                (const char**)data_fields,
-                field_count
-            );
-            
-            // ASN.1 encoding successful - will be sent below
-            
+            // Skip detected messages (commented out for now)
         } else if (data_mod) {
             // This is raw pulse data - encode as SignalMessage
             target_queue = asn1_out->signals_queue;
@@ -166,156 +107,96 @@ static void R_API_CALLCONV print_asn1_data(data_output_t *output, data_t *data, 
                 return;
             }
             
-            // Try to get pulse_data if available
-            pulse_data_t *pulse_data = NULL;
+            // Create pulse_data_ex_t from available data fields
+            pulse_data_ex_t pulse_ex;
+            pulse_data_ex_init(&pulse_ex);
             
-            // Look for pulse_data in the data structure
-            for (data_t *d = data; d; d = d->next) {
-                if (strcmp(d->key, "pulse_data") == 0 && d->type == DATA_DATA) {
-                    pulse_data = (pulse_data_t*)d->value.v_ptr;
-                    break;
-                }
-            }
+            // Set defaults
+            pulse_ex.pulse_data.centerfreq_hz = 433920000;  // Default frequency
+            pulse_ex.pulse_data.sample_rate = 250000;       // Default sample rate
             
-            if (pulse_data) {
-                // Use direct pulse_data encoding
-                asn1_buffer = rtl433_asn1_encode_pulse_data_to_signal(
-                    pulse_data,
-                    ++asn1_out->package_counter
-                );
-            } else {
-                // Fallback: extract basic signal parameters
-                uint32_t frequency = 433920000;  // Default frequency
-                int modulation = 0;  // Default to OOK
-                
-                // Extract frequency and modulation from data
+            // Set package_id
+            pulse_data_ex_set_package_id(&pulse_ex, ++asn1_out->package_counter);
+            
+            // Extract all fields from data_t in one pass
                 for (data_t *d = data; d; d = d->next) {
                     if (strcmp(d->key, "freq_Hz") == 0 && d->type == DATA_INT) {
-                        frequency = (uint32_t)d->value.v_int;
-                    } else if (strcmp(d->key, "freq1_Hz") == 0 && d->type == DATA_INT) {
-                        frequency = (uint32_t)d->value.v_int;
+                    pulse_ex.pulse_data.centerfreq_hz = (double)d->value.v_int;
                     } else if (strcmp(d->key, "mod") == 0 && d->type == DATA_STRING) {
-                        if (strcmp((const char*)d->value.v_ptr, "FSK") == 0) {
-                            modulation = 1;  // FSK
-                        }
-                    }
-                }
-                
-                // Extract signal data: hex_string OR pulses array
-                const char *hex_string = NULL;
-                const char *time_string = NULL;
-                data_array_t *pulses_array = NULL;
-                int count = 0;
-                int sample_rate = 250000;  // Default
-                
-                for (data_t *d = data; d; d = d->next) {
-                    if (strcmp(d->key, "hex_string") == 0 && d->type == DATA_STRING) {
-                        hex_string = (const char*)d->value.v_ptr;
+                    pulse_data_ex_set_modulation_type(&pulse_ex, (const char*)d->value.v_ptr);
                     } else if (strcmp(d->key, "time") == 0 && d->type == DATA_STRING) {
-                        time_string = (const char*)d->value.v_ptr;
+                    pulse_data_ex_set_timestamp_str(&pulse_ex, (const char*)d->value.v_ptr);
+                } else if (strcmp(d->key, "hex_string") == 0 && d->type == DATA_STRING) {
+                    pulse_data_ex_set_hex_string(&pulse_ex, (const char*)d->value.v_ptr);
+                } else if (strcmp(d->key, "rate_Hz") == 0 && d->type == DATA_INT) {
+                    pulse_ex.pulse_data.sample_rate = (uint32_t)d->value.v_int;
+                } else if (strcmp(d->key, "count") == 0 && d->type == DATA_INT) {
+                    pulse_ex.pulse_data.num_pulses = (uint32_t)d->value.v_int;
                     } else if (strcmp(d->key, "pulses") == 0 && d->type == DATA_ARRAY) {
-                        pulses_array = (data_array_t*)d->value.v_ptr;
-                    } else if (strcmp(d->key, "count") == 0 && d->type == DATA_INT) {
-                        count = d->value.v_int;
-                    } else if (strcmp(d->key, "rate_Hz") == 0 && d->type == DATA_INT) {
-                        sample_rate = d->value.v_int;
-                    }
-                }
-                
-                // Parse hex_string for multiple signals (separated by '+')
-                const uint8_t *hex_strings[RTL433_ASN1_HEX_STRINGS_MAX_COUNT];
-                size_t hex_string_lens[RTL433_ASN1_HEX_STRINGS_MAX_COUNT];
-                uint16_t hex_strings_count = 0;
-                uint16_t *pulses_data = NULL;
-                int pulses_count = 0;
-                
-                if (hex_string && strlen(hex_string) > 0) {
-                    // Parse multiple hex strings separated by '+'
-                    char *hex_copy = strdup(hex_string);
-                    char *token = strtok(hex_copy, "+");
-                    
-                    while (token && hex_strings_count < RTL433_ASN1_HEX_STRINGS_MAX_COUNT) {
-                        size_t token_len = strlen(token);
-                        if (token_len > 0 && token_len <= RTL433_ASN1_HEX_STRING_MAX_SIZE) {
-                            hex_strings[hex_strings_count] = (const uint8_t*)strdup(token);
-                            hex_string_lens[hex_strings_count] = token_len;
-                            hex_strings_count++;
-                        }
-                        token = strtok(NULL, "+");
-                    }
-                    free(hex_copy);
-                    
-                } else if (pulses_array && count > 0) {
-                    // Use pulses array as fallback
-                    pulses_count = count * 2;  // pulse + gap pairs
-                    if (pulses_count > pulses_array->num_values) {
-                        pulses_count = pulses_array->num_values;
-                    }
-                    
-                    pulses_data = malloc(pulses_count * sizeof(uint16_t));
-                    if (pulses_data) {
-                        // data_array_t->values is void*, cast to int* for DATA_INT arrays
+                    // Handle pulses array - format: [pulse_μs, gap_μs, pulse_μs, gap_μs, ...]
+                    // Values are in microseconds, need to convert to samples
+                    data_array_t *pulses_array = (data_array_t*)d->value.v_ptr;
+                    if (pulses_array && pulse_ex.pulse_data.num_pulses > 0 && pulse_ex.pulse_data.sample_rate > 0) {
+                        int pulses_to_copy = (pulse_ex.pulse_data.num_pulses > PD_MAX_PULSES) ? 
+                                            PD_MAX_PULSES : pulse_ex.pulse_data.num_pulses;
                         int *array_values = (int*)pulses_array->values;
-                        for (int i = 0; i < pulses_count; i++) {
-                            pulses_data[i] = (uint16_t)array_values[i];
+                        double from_us = pulse_ex.pulse_data.sample_rate / 1e6; // Convert μs back to samples
+                        
+                        // Extract pulse and gap pairs from alternating array (values in microseconds)
+                        for (int i = 0; i < pulses_to_copy; i++) {
+                            int array_idx = i * 2;  // Each pulse-gap pair takes 2 elements
+                            if (array_idx < pulses_array->num_values) {
+                                double pulse_us = array_values[array_idx];
+                                pulse_ex.pulse_data.pulse[i] = (int)(pulse_us * from_us);
+                            }
+                            if (array_idx + 1 < pulses_array->num_values) {
+                                double gap_us = array_values[array_idx + 1];
+                                pulse_ex.pulse_data.gap[i] = (int)(gap_us * from_us);
+                            }
                         }
                     }
                 }
-                
-                // Convert RTL433 time format "@37.748737s" to ISO timestamp
-                char *iso_timestamp = NULL;
-                if (time_string && strncmp(time_string, "@", 1) == 0) {
-                    // Parse seconds from "@37.748737s" format
-                    double seconds = 0.0;
-                    if (sscanf(time_string, "@%lfs", &seconds) == 1) {
-                        // Create ISO timestamp (simplified - using current time as base)
-                        time_t now = time(NULL);
-                        struct tm *utc_tm = gmtime(&now);
-                        iso_timestamp = malloc(32);
-                        if (iso_timestamp) {
-                            strftime(iso_timestamp, 32, "%Y-%m-%dT%H:%M:%S.000Z", utc_tm);
-                        }
-                    }
+                // Add signal quality fields
+                else if (strcmp(d->key, "rssi_dB") == 0 && d->type == DATA_DOUBLE) {
+                    pulse_ex.pulse_data.rssi_db = (float)d->value.v_dbl;
+                } else if (strcmp(d->key, "snr_dB") == 0 && d->type == DATA_DOUBLE) {
+                    pulse_ex.pulse_data.snr_db = (float)d->value.v_dbl;
+                } else if (strcmp(d->key, "noise_dB") == 0 && d->type == DATA_DOUBLE) {
+                    pulse_ex.pulse_data.noise_db = (float)d->value.v_dbl;
+                } else if (strcmp(d->key, "range_dB") == 0 && d->type == DATA_DOUBLE) {
+                    pulse_ex.pulse_data.range_db = (float)d->value.v_dbl;
+                } else if (strcmp(d->key, "depth_bits") == 0 && d->type == DATA_INT) {
+                    pulse_ex.pulse_data.depth_bits = (unsigned)d->value.v_int;
                 }
-                
-                // Use new multi-hex function or fallback to pulses
-                if (hex_strings_count > 0) {
-                    asn1_buffer = rtl433_asn1_encode_signal_multi(
-                        ++asn1_out->package_counter,  // package_id
-                        iso_timestamp,                // timestamp (converted from RTL433 format)
-                        hex_strings, hex_string_lens, hex_strings_count, // multiple hex strings
-                        pulses_data, pulses_count, sample_rate,  // pulses_data (if available)
-                        modulation,
-                        frequency
-                    );
-                } else {
-                    asn1_buffer = rtl433_asn1_encode_signal_multi(
-                        ++asn1_out->package_counter,  // package_id
-                        iso_timestamp,                // timestamp (converted from RTL433 format)
-                        NULL, NULL, 0,                // no hex strings
-                        pulses_data, pulses_count, sample_rate,  // pulses_data only
-                        modulation,
-                        frequency
-                    );
+                // Add timing info fields
+                else if (strcmp(d->key, "ook_low_estimate") == 0 && d->type == DATA_INT) {
+                    pulse_ex.pulse_data.ook_low_estimate = d->value.v_int;
+                } else if (strcmp(d->key, "ook_high_estimate") == 0 && d->type == DATA_INT) {
+                    pulse_ex.pulse_data.ook_high_estimate = d->value.v_int;
+                } else if (strcmp(d->key, "fsk_f1_est") == 0 && d->type == DATA_INT) {
+                    pulse_ex.pulse_data.fsk_f1_est = d->value.v_int;
+                } else if (strcmp(d->key, "fsk_f2_est") == 0 && d->type == DATA_INT) {
+                    pulse_ex.pulse_data.fsk_f2_est = d->value.v_int;
                 }
-                
-                // Free allocated timestamp
-                if (iso_timestamp) {
-                    free(iso_timestamp);
-                }
-                
-                // Free allocated memory
-                if (pulses_data) {
-                    free(pulses_data);
-                }
-                
-                // Free hex_strings memory
-                for (uint16_t i = 0; i < hex_strings_count; i++) {
-                    if (hex_strings[i]) {
-                        free((void*)hex_strings[i]);
-                    }
+                // Add additional fields
+                else if (strcmp(d->key, "offset") == 0 && d->type == DATA_INT) {
+                    pulse_ex.pulse_data.offset = (uint64_t)d->value.v_int;
+                } else if (strcmp(d->key, "start_ago") == 0 && d->type == DATA_INT) {
+                    pulse_ex.pulse_data.start_ago = (unsigned)d->value.v_int;
+                } else if (strcmp(d->key, "end_ago") == 0 && d->type == DATA_INT) {
+                    pulse_ex.pulse_data.end_ago = (unsigned)d->value.v_int;
+                } else if (strcmp(d->key, "freq1_Hz") == 0 && d->type == DATA_INT) {
+                    pulse_ex.pulse_data.freq1_hz = (float)d->value.v_int;
+                } else if (strcmp(d->key, "freq2_Hz") == 0 && d->type == DATA_INT) {
+                    pulse_ex.pulse_data.freq2_hz = (float)d->value.v_int;
                 }
             }
+            
+            // Encode using rtl433_asn1_pulse (package_id automatically used)
+            asn1_buffer = encode(&pulse_ex);
+            
+            // Cleanup
+            pulse_data_ex_free(&pulse_ex);
             
             // ASN.1 encoding successful - will be sent below
         }
@@ -333,7 +214,9 @@ static void R_API_CALLCONV print_asn1_data(data_output_t *output, data_t *data, 
             }
             
             // Free the ASN.1 buffer
-            rtl433_asn1_free_buffer(&asn1_buffer);
+            if (asn1_buffer.buffer) {
+                free(asn1_buffer.buffer);
+            }
         } else {
             print_logf(LOG_ERROR, "ASN1", "Failed to encode ASN.1 message: %d", asn1_buffer.result);
         }
@@ -506,3 +389,4 @@ struct data_output *data_output_asn1_create(struct mg_mgr *mgr, char *param, cha
     
     return (struct data_output *)asn1_out;
 }
+

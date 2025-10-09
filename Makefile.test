@@ -1,0 +1,48 @@
+# Simple Makefile for RTL433Message decoder test
+
+CC = gcc
+CFLAGS = -Wall -Wextra -std=c99 -I. -Ibuild/asn1/asn1-generated -Ishared/include -Iinclude
+LDFLAGS = -Lbuild/shared -lrtl433_shared -Lbuild/asn1 -lr_asn1 -ljson-c -lm
+
+TARGET = test_decode_rtl433
+SOURCE = test_decode_rtl433.c
+
+# Build directory paths
+BUILD_DIR = build
+SHARED_LIB = $(BUILD_DIR)/shared/librtl433_shared.a
+ASN1_LIB = $(BUILD_DIR)/asn1/libr_asn1.a
+
+.PHONY: all clean
+
+all: $(TARGET)
+
+$(TARGET): $(SOURCE) $(SHARED_LIB) $(ASN1_LIB)
+	@echo "🔧 Compiling $(TARGET)..."
+	$(CC) $(CFLAGS) -o $(TARGET) $(SOURCE) $(LDFLAGS)
+	@echo "✅ $(TARGET) compiled successfully!"
+
+$(SHARED_LIB):
+	@echo "🔧 Building shared library..."
+	cd $(BUILD_DIR) && $(MAKE) rtl433_shared
+
+$(ASN1_LIB):
+	@echo "🔧 Building ASN.1 library..."
+	cd $(BUILD_DIR) && $(MAKE) r_asn1
+
+clean:
+	@echo "🧹 Cleaning up..."
+	rm -f $(TARGET)
+	@echo "✅ Clean completed!"
+
+test: $(TARGET)
+	@echo "🚀 Running test..."
+	./$(TARGET)
+
+.PHONY: help
+help:
+	@echo "Available targets:"
+	@echo "  all     - Build the test program"
+	@echo "  clean   - Remove built files"
+	@echo "  test    - Build and run the test program"
+	@echo "  help    - Show this help message"
+

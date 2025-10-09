@@ -40,6 +40,7 @@ SignalMessage ::= SEQUENCE {
     -- RF parameters
     modulation          ModulationType,
     frequency           RFParameters,
+    sampleRate         INTEGER (1..4294967295),          -- uint32 (rate_Hz)
     
     -- Signal quality metrics
     signalQuality       SignalQuality OPTIONAL,
@@ -58,7 +59,6 @@ SignalData ::= CHOICE {
 -- Pulses array representation
 PulsesData ::= SEQUENCE {
     count              INTEGER (pdMinPulses..pdMaxPulses),       -- uint16 (16..1200)
-    sampleRate         INTEGER (1..4294967295),          -- uint32 (rate_Hz)
     pulses             SEQUENCE (SIZE (pdMinPulses..pdMaxPulses)) OF INTEGER (0..65535)  -- uint16 array (16..1200 elements)
 }
 

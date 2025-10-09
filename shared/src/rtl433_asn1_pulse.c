@@ -513,23 +513,39 @@ RTL433Message_t *prepare_pulse_data(pulse_data_ex_t *pulse_ex) {
         return NULL;
     }
     
-    // Set pulses data
+    // Set pulses data count
     pulses_data->count = pulse->num_pulses;
     
-    // Fill pulses array ALWAYS - both hex_string and pulses are needed for device detection
+    // ========== PRIORITY 1: Use pulses array if available (100% accuracy) ==========
     if (pulse->num_pulses > 0) {
-        printf("📦 Adding %u pulses to ASN.1 structure\n", pulse->num_pulses);
+        printf("✅ PRIORITY 1: Using EXACT pulses array (%u pulses) for SignalData\n", pulse->num_pulses);
+        
+        // Fill pulses array with alternating pulse/gap pairs (like JSON format)
         for (unsigned int i = 0; i < pulse->num_pulses; i++) {
+            // Add pulse
             long *pulse_val = calloc(1, sizeof(long));
             if (pulse_val) {
                 *pulse_val = pulse->pulse[i];
                 ASN_SEQUENCE_ADD(&pulses_data->pulses.list, pulse_val);
             }
+            // Add gap
+            long *gap_val = calloc(1, sizeof(long));
+            if (gap_val) {
+                *gap_val = pulse->gap[i];
+                ASN_SEQUENCE_ADD(&pulses_data->pulses.list, gap_val);
+            }
         }
+        
+        // Use pulsesArray as SignalData (highest priority)
+        signal_msg->signalData.present = SignalData_PR_pulsesArray;
+        signal_msg->signalData.choice.pulsesArray = *pulses_data;
+        printf("📦 Added %u pulse-gap pairs (%u total values) to SignalData (pulsesArray)\n", 
+               pulse->num_pulses, pulse->num_pulses * 2);
     }
-    
-    // Handle signal data based on hex_string presence
-    if (pulse_ex->hex_string && strlen(pulse_ex->hex_string) > 0) {
+    // ========== PRIORITY 2: Fallback to hex_string if no pulses (~9% accuracy) ==========
+    else if (pulse_ex->hex_string && strlen(pulse_ex->hex_string) > 0) {
+        printf("⚠️ PRIORITY 2: FALLBACK to hex_string (no pulses available)\n");
+        
         // Check if hex_string contains multiple signals (separated by '+')
         if (strchr(pulse_ex->hex_string, '+')) {
             printf("📦 Using hexStrings for multiple signals\n");
@@ -560,11 +576,12 @@ RTL433Message_t *prepare_pulse_data(pulse_data_ex_t *pulse_ex) {
                 }
                 
                 free_hex_strings_array(hex_array, hex_count);
-                printf("📦 Added %d hex strings to SignalData\n", hex_count);
+                printf("📦 Added %d hex strings to SignalData (approximate)\n", hex_count);
             } else {
-                // Fallback to pulses array if hex parsing failed
+                // Failed to parse hex - use empty pulses array
                 signal_msg->signalData.present = SignalData_PR_pulsesArray;
                 signal_msg->signalData.choice.pulsesArray = *pulses_data;
+                printf("⚠️ Failed to parse hex_string, using empty pulsesArray\n");
             }
         } else {
             printf("📦 Using hexString for single signal\n");
@@ -578,15 +595,18 @@ RTL433Message_t *prepare_pulse_data(pulse_data_ex_t *pulse_ex) {
                 OCTET_STRING_fromBuf(&signal_msg->signalData.choice.hexString, 
                                    (const char*)binary_data, binary_size);
                 free(binary_data);
-                printf("📦 Added single hex string to SignalData (%zu bytes)\n", binary_size);
+                printf("📦 Added single hex string to SignalData (%zu bytes, approximate)\n", binary_size);
             } else {
-                // Fallback to pulses array
+                // Failed to convert hex - use empty pulses array
                 signal_msg->signalData.present = SignalData_PR_pulsesArray;
                 signal_msg->signalData.choice.pulsesArray = *pulses_data;
+                printf("⚠️ Failed to convert hex_string, using empty pulsesArray\n");
             }
         }
-    } else {
-        // No hex string data, use pulses array
+    }
+    // ========== PRIORITY 3: No data available ==========
+    else {
+        printf("⚠️ WARNING: No pulses and no hex_string - using empty pulsesArray\n");
         signal_msg->signalData.present = SignalData_PR_pulsesArray;
         signal_msg->signalData.choice.pulsesArray = *pulses_data;
     }
@@ -833,8 +853,46 @@ pulse_data_ex_t *extract_pulse_data(RTL433Message_t *rtl433_msg) {
             break;
     }
     
-    // Extract signal data based on present type
-    if (signal_msg->signalData.present == SignalData_PR_hexStrings) {
+    // Extract signal data based on present type (CHOICE - only one will be present)
+    if (signal_msg->signalData.present == SignalData_PR_pulsesArray) {
+        // Pulses array - stored as alternating pulse/gap pairs
+        PulsesData_t *pulses_data = &signal_msg->signalData.choice.pulsesArray;
+        int array_count = pulses_data->pulses.list.count;
+        printf("📦 Extracting %d values (pulse-gap pairs) from SignalData\n", array_count);
+        
+        // Calculate number of pulse-gap pairs
+        pulse_data->num_pulses = array_count / 2;  // Each pair = 2 values
+        
+        if (pulse_data->num_pulses > PD_MAX_PULSES) {
+            printf("⚠️  Warning: truncating %u pulses to %d\n", 
+                   pulse_data->num_pulses, PD_MAX_PULSES);
+            pulse_data->num_pulses = PD_MAX_PULSES;
+        }
+        
+        // Extract pulse/gap pairs from alternating array
+        for (int i = 0; i < pulse_data->num_pulses; i++) {
+            int array_idx = i * 2;  // Each pair takes 2 array elements
+            
+            // Extract pulse
+            if (array_idx < array_count) {
+                long *pulse_val = pulses_data->pulses.list.array[array_idx];
+                if (pulse_val) {
+                    pulse_data->pulse[i] = *pulse_val;
+                }
+            }
+            
+            // Extract gap
+            if (array_idx + 1 < array_count) {
+                long *gap_val = pulses_data->pulses.list.array[array_idx + 1];
+                if (gap_val) {
+                    pulse_data->gap[i] = *gap_val;
+                }
+            }
+        }
+        
+        printf("✅ Extracted %u pulse-gap pairs (pulse[] and gap[] filled)\n", pulse_data->num_pulses);
+        
+    } else if (signal_msg->signalData.present == SignalData_PR_hexStrings) {
         // Multiple hex strings - reconstruct with '+' separator
         printf("📦 Extracting %d hex strings from SignalData\n", 
                signal_msg->signalData.choice.hexStrings.list.count);
@@ -872,11 +930,8 @@ pulse_data_ex_t *extract_pulse_data(RTL433Message_t *rtl433_msg) {
             printf("📦 Reconstructed hex_string: %.100s%s\n", 
                    hex_string, strlen(hex_string) > 100 ? "..." : "");
             
-            // Try to parse hex_string as rfraw format to reconstruct pulses
-            if (pulse_data->num_pulses == 0) {
-                printf("🔄 Multiple hex_strings present but no pulses reconstructed - keeping as signal data only\n");
-                printf("📦 Skipping pulse reconstruction to preserve ASN.1 extracted fields\n");
-            }
+            // Don't reconstruct pulses from hex_string - metadata already extracted
+            printf("📦 Skipping pulse reconstruction to preserve ASN.1 extracted fields\n");
             
             free(hex_string);
         }
@@ -899,33 +954,10 @@ pulse_data_ex_t *extract_pulse_data(RTL433Message_t *rtl433_msg) {
                 printf("📦 Extracted hex_string: %.100s%s\n", 
                        hex_string, strlen(hex_string) > 100 ? "..." : "");
                 
-                // Try to parse hex_string as rfraw format to reconstruct pulses
-                if (pulse_data->num_pulses == 0) {
-                    printf("🔄 hex_string present but no pulses reconstructed - keeping as signal data only\n");
-                    printf("📦 Skipping pulse reconstruction to preserve ASN.1 extracted fields\n");
-                }
+                // Don't reconstruct pulses from hex_string - metadata already extracted
+                printf("📦 Skipping pulse reconstruction to preserve ASN.1 extracted fields\n");
                 
                 free(hex_string);
-            }
-        }
-        
-    } else if (signal_msg->signalData.present == SignalData_PR_pulsesArray) {
-        // Pulses array
-        PulsesData_t *pulses_data = &signal_msg->signalData.choice.pulsesArray;
-        printf("📦 Extracting %d pulses from SignalData\n", pulses_data->pulses.list.count);
-        
-        pulse_data->num_pulses = pulses_data->pulses.list.count;
-        
-        if (pulse_data->num_pulses > PD_MAX_PULSES) {
-            printf("⚠️  Warning: truncating %u pulses to %d\n", 
-                   pulse_data->num_pulses, PD_MAX_PULSES);
-            pulse_data->num_pulses = PD_MAX_PULSES;
-        }
-        
-        for (int i = 0; i < pulse_data->num_pulses; i++) {
-            long *pulse_val = pulses_data->pulses.list.array[i];
-            if (pulse_val) {
-                pulse_data->pulse[i] = *pulse_val;
             }
         }
     }
@@ -1534,3 +1566,4 @@ rtl433_asn1_buffer_t encode_rtl433_message(pulse_data_t *pulse) {
     
     return result;
 }
+

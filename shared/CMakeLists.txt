@@ -66,7 +66,7 @@ set(SHARED_SOURCES
     src/rtl433_override.c
     src/output_rabbitmq.c
     src/rtl433_signal_format.c
-    src/rtl433_asn1.c
+    src/rtl433_asn1_detect.c
     src/output_asn1.c
     src/rtl433_asn1_pulse.c
 )
