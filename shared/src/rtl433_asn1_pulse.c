@@ -518,6 +518,15 @@ RTL433Message_t *prepare_pulse_data(pulse_data_ex_t *pulse_ex) {
     
     // ========== PRIORITY 1: Use pulses array if available (100% accuracy) ==========
     if (pulse->num_pulses > 0) {
+        // ⚠️ VALIDATION: ASN.1 requires minimum PD_MIN_PULSES (16) for pulsesArray
+        if (pulse->num_pulses < 16) {
+            printf("⚠️ WARNING: Signal has only %u pulses (< PD_MIN_PULSES=16)\n", pulse->num_pulses);
+            printf("⚠️ This signal may be noise/false trigger. Falling back to hex_string.\n");
+            
+            // Fall through to hex_string handling (PRIORITY 2)
+            goto use_hex_string_fallback;
+        }
+        
         printf("✅ PRIORITY 1: Using EXACT pulses array (%u pulses) for SignalData\n", pulse->num_pulses);
         
         // Fill pulses array with alternating pulse/gap pairs (like JSON format)
@@ -542,8 +551,11 @@ RTL433Message_t *prepare_pulse_data(pulse_data_ex_t *pulse_ex) {
         printf("📦 Added %u pulse-gap pairs (%u total values) to SignalData (pulsesArray)\n", 
                pulse->num_pulses, pulse->num_pulses * 2);
     }
-    // ========== PRIORITY 2: Fallback to hex_string if no pulses (~9% accuracy) ==========
-    else if (pulse_ex->hex_string && strlen(pulse_ex->hex_string) > 0) {
+    
+use_hex_string_fallback:
+    // ========== PRIORITY 2: Fallback to hex_string if no pulses or < 16 pulses (~9% accuracy) ==========
+    if ((pulse->num_pulses == 0 || pulse->num_pulses < 16) && 
+        pulse_ex->hex_string && strlen(pulse_ex->hex_string) > 0) {
         printf("⚠️ PRIORITY 2: FALLBACK to hex_string (no pulses available)\n");
         
         // Check if hex_string contains multiple signals (separated by '+')
@@ -604,11 +616,21 @@ RTL433Message_t *prepare_pulse_data(pulse_data_ex_t *pulse_ex) {
             }
         }
     }
-    // ========== PRIORITY 3: No data available ==========
+    // ========== PRIORITY 3: No data available or signal too short ==========
     else {
-        printf("⚠️ WARNING: No pulses and no hex_string - using empty pulsesArray\n");
-        signal_msg->signalData.present = SignalData_PR_pulsesArray;
-        signal_msg->signalData.choice.pulsesArray = *pulses_data;
+        if (pulse->num_pulses > 0 && pulse->num_pulses < 16) {
+            printf("⚠️ ERROR: Signal has %u pulses (< PD_MIN_PULSES=16) and no hex_string available\n", pulse->num_pulses);
+            printf("⚠️ Cannot encode this signal - likely noise/false trigger. Discarding.\n");
+            // Clean up and return NULL to indicate failure
+            free(pulses_data);
+            free(signal_msg);
+            free(rtl433_msg);
+            return NULL;
+        } else {
+            printf("⚠️ WARNING: No pulses and no hex_string - using empty pulsesArray\n");
+            signal_msg->signalData.present = SignalData_PR_pulsesArray;
+            signal_msg->signalData.choice.pulsesArray = *pulses_data;
+        }
     }
     
     // Set modulation type based on pulse_data_ex->modulation_type

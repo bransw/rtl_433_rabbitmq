@@ -194,7 +194,6 @@ add_custom_command(
         -fno-include-deps
         -pdu=all
         -gen-PER
-        -gen-OER
         -D ${ASN1_GENERATED_DIR}
         ${ASN1_SCHEMA_FILE}
     COMMAND ${CMAKE_COMMAND} -E echo "ASN.1 code generation completed successfully"

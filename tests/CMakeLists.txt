@@ -40,6 +40,15 @@ if(ENABLE_ASN1)
         ${ASN1_INCLUDE_DIRS})
     add_test(asn1_decoder_test test_asn1_decoder)
     
+    # ASN.1 DetectedMessage Reader (requires RabbitMQ)
+    if(ENABLE_RABBITMQ)
+        add_executable(test_asn1_detected_reader test_asn1_detected_reader.c)
+        target_link_libraries(test_asn1_detected_reader r_asn1 rabbitmq m)
+        target_include_directories(test_asn1_detected_reader PRIVATE 
+            ../shared/include 
+            ../include
+            ${ASN1_INCLUDE_DIRS})
+    endif()
     
     # Standalone encode/decode test (no RabbitMQ) - DISABLED due to complex dependencies
     # add_executable(test_asn1_encode_decode ../test_asn1_encode_decode.c)

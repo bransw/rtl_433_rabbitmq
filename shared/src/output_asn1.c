@@ -29,6 +29,7 @@
 
 // Include ASN.1 support
 #include "rtl433_asn1_pulse.h"
+#include "rtl433_asn1_detect.h"
 
 // Global variable to access raw_mode from client
 extern int g_rtl433_raw_mode;
@@ -85,8 +86,6 @@ static void R_API_CALLCONV print_asn1_data(data_output_t *output, data_t *data, 
             data_mod = d;
     }
     
-    
-    
     // Route data based on type and -Q parameter
     if (data_model || data_mod) {
         const char *target_queue = NULL;
@@ -94,7 +93,123 @@ static void R_API_CALLCONV print_asn1_data(data_output_t *output, data_t *data, 
         int should_send = 0;
         
         if (data_model) {
-            // Skip detected messages (commented out for now)
+            // This is a detected device - encode as DetectedMessage
+            fprintf(stderr, "🔍🔍🔍 ASN.1: DETECTED MESSAGE FOUND! 🔍🔍🔍\n");
+            target_queue = asn1_out->detected_queue;
+            
+            // Check -Q parameter: 0=both, 2=detected only, 3=both
+            should_send = (g_rtl433_raw_mode == 0 || g_rtl433_raw_mode == 2 || g_rtl433_raw_mode == 3);
+            
+            if (!should_send) {
+                fprintf(stderr, "⚠️ ASN.1: Skipping detected due to -Q %d\n", g_rtl433_raw_mode);
+                return;
+            }
+            
+            fprintf(stderr, "✅ ASN.1: Processing detected message\n");
+            
+            // Extract device information
+            const char *model = NULL;
+            const char *device_type = NULL;
+            const char *device_id = NULL;
+            const char *protocol = NULL;
+            
+            // Count data fields (excluding standard fields)
+            int field_count = 0;
+            for (data_t *d = data; d; d = d->next) {
+                if (strcmp(d->key, "model") == 0 && d->type == DATA_STRING) {
+                    model = (const char*)d->value.v_ptr;
+                } else if (strcmp(d->key, "type") == 0 && d->type == DATA_STRING) {
+                    device_type = (const char*)d->value.v_ptr;
+                } else if (strcmp(d->key, "id") == 0 && d->type == DATA_INT) {
+                    // Will be converted to string
+                    field_count++;
+                } else if (strcmp(d->key, "protocol") == 0 && d->type == DATA_STRING) {
+                    protocol = (const char*)d->value.v_ptr;
+                } else if (strcmp(d->key, "time") != 0 && strcmp(d->key, "model") != 0) {
+                    // Count all other fields except time and model
+                    field_count++;
+                }
+            }
+            
+            // Build data fields array (key-value pairs)
+            const char **fields_array = NULL;
+            char **allocated_strings = NULL;  // Track allocated strings for cleanup
+            int allocated_count = 0;
+            
+            if (field_count > 0) {
+                fields_array = calloc(field_count * 2, sizeof(char*));
+                allocated_strings = calloc(field_count, sizeof(char*));
+                
+                if (fields_array && allocated_strings) {
+                    int idx = 0;
+                    
+                    for (data_t *d = data; d; d = d->next) {
+                        if (strcmp(d->key, "time") == 0 || strcmp(d->key, "model") == 0 || 
+                            strcmp(d->key, "type") == 0 || strcmp(d->key, "protocol") == 0) {
+                            continue; // Skip metadata fields
+                        }
+                        
+                        fields_array[idx++] = d->key;
+                        
+                        if (d->type == DATA_STRING) {
+                            fields_array[idx++] = (const char*)d->value.v_ptr;
+                        } else if (d->type == DATA_INT) {
+                            char *int_str = malloc(32);
+                            if (int_str) {
+                                snprintf(int_str, 32, "%d", d->value.v_int);
+                                fields_array[idx++] = int_str;
+                                allocated_strings[allocated_count++] = int_str;
+                            }
+                        } else if (d->type == DATA_DOUBLE) {
+                            char *dbl_str = malloc(32);
+                            if (dbl_str) {
+                                snprintf(dbl_str, 32, "%.2f", d->value.v_dbl);
+                                fields_array[idx++] = dbl_str;
+                                allocated_strings[allocated_count++] = dbl_str;
+                            }
+                        } else {
+                            fields_array[idx++] = "(unknown)";
+                        }
+                        
+                        if (idx >= field_count * 2) break;
+                    }
+                }
+            }
+            
+            // Encode detected message
+            print_logf(LOG_DEBUG, "ASN1", "🔄 Encoding detected message: model=%s, fields=%d", 
+                      model ? model : "(null)", field_count);
+            
+            asn1_buffer = rtl433_asn1_encode_detected(
+                ++asn1_out->package_counter,
+                NULL,  // timestamp (use current time)
+                model,
+                device_type,
+                device_id,
+                protocol,
+                fields_array,
+                field_count * 2
+            );
+            
+            if (asn1_buffer.result == RTL433_ASN1_OK) {
+                print_logf(LOG_DEBUG, "ASN1", "✅ DetectedMessage encoded successfully (%zu bytes)", 
+                          asn1_buffer.buffer_size);
+            } else {
+                print_logf(LOG_ERROR, "ASN1", "❌ Failed to encode DetectedMessage: %d", 
+                          asn1_buffer.result);
+            }
+            
+            // Cleanup fields array
+            if (allocated_strings) {
+                for (int i = 0; i < allocated_count; i++) {
+                    free(allocated_strings[i]);
+                }
+                free(allocated_strings);
+            }
+            if (fields_array) {
+                free(fields_array);
+            }
+            
         } else if (data_mod) {
             // This is raw pulse data - encode as SignalMessage
             target_queue = asn1_out->signals_queue;
@@ -203,6 +318,9 @@ static void R_API_CALLCONV print_asn1_data(data_output_t *output, data_t *data, 
         
         // Send the ASN.1 encoded message
         if (asn1_buffer.result == RTL433_ASN1_OK && asn1_buffer.buffer) {
+            fprintf(stderr, "📤 ASN.1: Sending %zu bytes to queue '%s'\n", 
+                    asn1_buffer.buffer_size, target_queue ? target_queue : "(null)");
+            
             // Send binary ASN.1 data with proper content type
             int result = rtl433_transport_send_binary_to_queue(&asn1_out->conn, 
                                                              asn1_buffer.buffer, 
@@ -210,7 +328,9 @@ static void R_API_CALLCONV print_asn1_data(data_output_t *output, data_t *data, 
                                                              target_queue);
             
             if (result != 0) {
-                print_logf(LOG_ERROR, "ASN1", "Failed to send ASN.1 message to %s", target_queue);
+                fprintf(stderr, "❌ ASN.1: Failed to send message to %s (error=%d)\n", target_queue, result);
+            } else {
+                fprintf(stderr, "✅ ASN.1: Message sent successfully to %s\n", target_queue);
             }
             
             // Free the ASN.1 buffer
@@ -368,7 +488,20 @@ struct data_output *data_output_asn1_create(struct mg_mgr *mgr, char *param, cha
     // Set ASN.1 specific queue names (always set these, even if not connected)
     asn1_out->signals_queue = strdup("asn1_signals");
     asn1_out->detected_queue = strdup("asn1_detected");
+    
+    // IMPORTANT: Always use rtl_433 exchange, NOT from URL!
+    // The URL exchange is just for parsing, we override it here
+    if (asn1_out->base_topic) {
+        free(asn1_out->base_topic);
+    }
     asn1_out->base_topic = strdup("rtl_433");
+    
+    // Update the config exchange to match
+    if (asn1_out->config.exchange) {
+        free(asn1_out->config.exchange);
+    }
+    asn1_out->config.exchange = strdup("rtl_433");
+    print_logf(LOG_NOTICE, "ASN1", "Using exchange: rtl_433 (forced)");
     
     if (!asn1_out->signals_queue || !asn1_out->detected_queue || !asn1_out->base_topic) {
         print_logf(LOG_ERROR, "ASN1", "Failed to allocate queue names");
